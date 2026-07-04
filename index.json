@@ -1,0 +1,13 @@
+{
+  "addons": [
+    {
+      "id": "oscilloscope",
+      "name": "Oscilloscope",
+      "version": "1.0.0",
+      "description": "Classic green waveform scope that traces the live audio signal.",
+      "author": "kl3mta3",
+      "entry": "main.js",
+      "files": ["addon.json", "main.js"]
+    }
+  ]
+}

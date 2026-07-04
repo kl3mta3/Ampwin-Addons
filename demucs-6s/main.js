@@ -37,7 +37,10 @@
   }
   // ---------------------------------------------------------------------------
 
-  const useGpu = () => localStorage.getItem(ADDON_ID + ':useGpu') !== 'off'
+  // Default OFF: CPU is reliable and reasonably fast (~a few seconds per chunk).
+  // GPU (DirectML) is an opt-in speedup — great on stable cards, but slow/
+  // unstable on brand-new GPUs whose DirectML kernels aren't optimized yet.
+  const useGpu = () => localStorage.getItem(ADDON_ID + ':useGpu') === 'on'
   const setUseGpu = (on) => localStorage.setItem(ADDON_ID + ':useGpu', on ? 'on' : 'off')
 
   const CSS = `
@@ -57,8 +60,11 @@
     #x:hover { background: #7f1f1f; }
     #main { flex: 1; overflow-y: auto; padding: 12px; }
     #status { font-size: 12px; color: #9aa1ac; margin-bottom: 6px; min-height: 16px; }
-    #pbar { height: 14px; background: #0b0d10; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
+    #prow { display: flex; align-items: center; gap: 8px; }
+    #pbar { flex: 1; height: 14px; background: #0b0d10; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
     #pfill { height: 100%; width: 0%; background: linear-gradient(90deg, #1f7a3f, #3fdf6f); transition: width .2s; }
+    #cancel { background: #3a1d1d; }
+    #cancel:hover { background: #7f1f1f; }
     #transport { display: flex; align-items: center; gap: 10px; padding: 10px 4px 14px; }
     #play { font-size: 16px; min-width: 44px; padding: 6px 0; }
     #seek { flex: 1; accent-color: #3fae66; -webkit-app-region: no-drag; }
@@ -101,7 +107,10 @@
       </div>
       <div id="main">
         <div id="status">starting…</div>
-        <div id="pbar"><div id="pfill"></div></div>
+        <div id="prow">
+          <div id="pbar"><div id="pfill"></div></div>
+          <button id="cancel" hidden title="Stop this separation">cancel</button>
+        </div>
         <div id="transport" hidden>
           <button id="play" title="Play all stems in sync">▶</button>
           <input id="seek" type="range" min="0" max="1000" value="0" />
@@ -135,14 +144,20 @@
       if (pct != null) $('pfill').style.width = pct + '%'
     }
 
+    let cancelled = false
+
     async function run(force) {
       if (running) return
       running = true
+      cancelled = false
       stopPreview()
       $('footer').hidden = true
       $('transport').hidden = true
       $('stems').textContent = ''
-      $('pbar').style.display = ''
+      $('prow').style.display = ''
+      $('cancel').hidden = false
+      $('cancel').disabled = false
+      $('cancel').textContent = 'cancel'
       setStatus('preparing…', 0)
       offProgress = ampwin.stems.on('progress', (key, p) => {
         if (key !== jobKey) return
@@ -158,15 +173,25 @@
         result = await ampwin.stems.separate(track, PACK, { useGpu: useGpu(), force, jobKey })
         renderStems()
         setStatus(result.fromCache && !force ? 'loaded from cache — previews below' : '✓ separation complete', 100)
-        $('pbar').style.display = 'none'
+        $('prow').style.display = 'none'
         $('footer').hidden = false
       } catch (err) {
-        setStatus('⚠ ' + (err.message || err).replace(/^Error invoking.*?: Error: /, ''), 0)
+        const msg = (err.message || String(err)).replace(/^Error invoking.*?: Error: /, '')
+        setStatus(cancelled || /cancel/i.test(msg) ? '■ cancelled' : '⚠ ' + msg, 0)
       }
+      $('cancel').hidden = true
       offProgress?.()
       offProgress = null
       running = false
     }
+
+    $('cancel').addEventListener('click', () => {
+      cancelled = true
+      $('cancel').disabled = true
+      $('cancel').textContent = 'cancelling…'
+      setStatus('cancelling…', null)
+      ampwin.stems.cancel(jobKey)
+    })
 
     // ---- synced preview: ONE transport drives every stem <audio> together;
     // per-stem mute buttons single instruments out (classic stem-player UX).
@@ -347,12 +372,13 @@
       </div>
       <div id="main">
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
-          <input type="checkbox" id="gpu" /> Use GPU
+          <input type="checkbox" id="gpu" /> Use GPU (DirectML) — experimental
         </label>
         <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
-          Runs separation on your graphics card (CUDA on NVIDIA, else DirectML).
-          Falls back to CPU automatically if the GPU can't run the model —
-          some very new GPUs aren't supported by DirectML yet.
+          Off by default. CPU is reliable and reasonably fast. Turning this on
+          uses your graphics card via DirectML — a big speedup on well-supported
+          GPUs, but on brand-new cards (e.g. RTX 50-series) DirectML is currently
+          slower than CPU and can crash mid-run; it falls back to CPU if so.
         </div>
         <button id="stems-folder">open stems download folder…</button>
         <div style="font-size:11px;color:#9aa1ac;margin-top:14px">

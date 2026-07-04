@@ -12,8 +12,8 @@
     {
       "id": "demucs-v4",
       "name": "Demucs v4 Stems",
-      "version": "1.0.0",
-      "description": "Split local songs into Vocals, Drums, Bass and Melody (HTDemucs v4 fine-tuned). Right-click a track ▸ Demucs v4 ▸ Get stems.",
+      "version": "1.1.0",
+      "description": "Split local songs into Vocals, Drums, Bass and Melody (HTDemucs v4 fine-tuned). Right-click a track > Demucs v4 > Get stems.",
       "author": "kl3mta3",
       "entry": "main.js",
       "files": ["addon.json", "main.js"]
@@ -21,8 +21,8 @@
     {
       "id": "demucs-6s",
       "name": "Demucs 6s Stems",
-      "version": "1.0.0",
-      "description": "Split local songs into 6 stems — Vocals, Drums, Bass, Guitar, Piano, Other (HTDemucs 6s). Right-click a track ▸ Demucs 6s ▸ Get stems.",
+      "version": "1.1.0",
+      "description": "Split local songs into 6 stems - Vocals, Drums, Bass, Guitar, Piano, Other (HTDemucs 6s). Right-click a track > Demucs 6s > Get stems.",
       "author": "kl3mta3",
       "entry": "main.js",
       "files": ["addon.json", "main.js"]

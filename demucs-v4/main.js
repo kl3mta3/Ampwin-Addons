@@ -50,9 +50,14 @@
     #status { font-size: 12px; color: #9aa1ac; margin-bottom: 6px; min-height: 16px; }
     #pbar { height: 14px; background: #0b0d10; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
     #pfill { height: 100%; width: 0%; background: linear-gradient(90deg, #1f7a3f, #3fdf6f); transition: width .2s; }
+    #transport { display: flex; align-items: center; gap: 10px; padding: 10px 4px 14px; }
+    #play { font-size: 16px; min-width: 44px; padding: 6px 0; }
+    #seek { flex: 1; accent-color: #3fae66; -webkit-app-region: no-drag; }
+    #time { font-family: Consolas, monospace; font-size: 12px; color: #6fd88f; min-width: 96px; text-align: right; }
     .stem { display: flex; align-items: center; gap: 10px; padding: 10px 8px; border-bottom: 1px solid #000; }
-    .stem-name { width: 110px; font-size: 13px; font-weight: bold; }
-    .stem audio { flex: 1; height: 34px; min-width: 120px; }
+    .stem.muted .stem-name { opacity: 0.35; }
+    .mute { min-width: 42px; }
+    .stem-name { flex: 1; font-size: 13px; font-weight: bold; }
     .dl { display: flex; gap: 4px; }
     .dl button { min-width: 48px; }
     #footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid #000; background: #14171d; align-items: center; }
@@ -88,6 +93,11 @@
       <div id="main">
         <div id="status">starting…</div>
         <div id="pbar"><div id="pfill"></div></div>
+        <div id="transport" hidden>
+          <button id="play" title="Play all stems in sync">▶</button>
+          <input id="seek" type="range" min="0" max="1000" value="0" />
+          <span id="time">0:00 / 0:00</span>
+        </div>
         <div id="stems"></div>
       </div>
       <div id="footer" hidden>
@@ -119,7 +129,9 @@
     async function run(force) {
       if (running) return
       running = true
+      stopPreview()
       $('footer').hidden = true
+      $('transport').hidden = true
       $('stems').textContent = ''
       $('pbar').style.display = ''
       setStatus('preparing…', 0)
@@ -147,26 +159,58 @@
       running = false
     }
 
+    // ---- synced preview: ONE transport drives every stem <audio> together;
+    // per-stem mute buttons single instruments out (classic stem-player UX).
+    let audios = []
+    let playing = false
+    let seeking = false
+
+    const fmtTime = (s) =>
+      isFinite(s) && s > 0 ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00'
+
+    function stopPreview() {
+      for (const a of audios) {
+        try {
+          a.pause()
+          a.src = ''
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      audios = []
+      playing = false
+    }
+
     function renderStems() {
+      stopPreview()
       const box = $('stems')
       box.textContent = ''
+      $('transport').hidden = false
+      $('play').textContent = '▶'
+      $('seek').value = 0
+
       for (const name of PACK.sources) {
         const info = result.stems[name]
+        const audio = doc.createElement('audio')
+        audio.preload = 'auto'
+        audio.src = info.url
+        audios.push(audio)
+
         const row = doc.createElement('div')
         row.className = 'stem'
+        const mute = doc.createElement('button')
+        mute.className = 'mute'
+        mute.textContent = '🔊'
+        mute.title = `Mute ${name}`
+        mute.addEventListener('click', () => {
+          audio.muted = !audio.muted
+          mute.textContent = audio.muted ? '🔇' : '🔊'
+          mute.classList.toggle('on', audio.muted)
+          row.classList.toggle('muted', audio.muted)
+        })
         const label = doc.createElement('div')
         label.className = 'stem-name'
         label.textContent = STEM_LABELS[name] || name
-        const audio = doc.createElement('audio')
-        audio.controls = true
-        audio.preload = 'none'
-        audio.src = info.url
-        // Previewing one stem pauses the others.
-        audio.addEventListener('play', () => {
-          box.querySelectorAll('audio').forEach((a) => {
-            if (a !== audio) a.pause()
-          })
-        })
         const dl = doc.createElement('div')
         dl.className = 'dl'
         for (const fmt of ['wav', 'flac', 'mp3']) {
@@ -176,10 +220,59 @@
           b.addEventListener('click', () => exportOne(b, info.path, fmt, name))
           dl.appendChild(b)
         }
-        row.append(label, audio, dl)
+        row.append(mute, label, dl)
         box.appendChild(row)
       }
+
+      // The first stem is the clock: it drives the seek bar and the end state.
+      const master = audios[0]
+      master.addEventListener('timeupdate', () => {
+        if (win.closed || seeking) return
+        const d = master.duration
+        $('time').textContent = `${fmtTime(master.currentTime)} / ${fmtTime(d)}`
+        if (d > 0) $('seek').value = Math.round((master.currentTime / d) * 1000)
+      })
+      master.addEventListener('ended', () => {
+        playing = false
+        $('play').textContent = '▶'
+      })
+      master.addEventListener('loadedmetadata', () => {
+        $('time').textContent = `0:00 / ${fmtTime(master.duration)}`
+      })
     }
+
+    function syncTo(sec) {
+      for (const a of audios) {
+        try {
+          a.currentTime = sec
+        } catch (e) {
+          /* not loaded yet */
+        }
+      }
+    }
+
+    $('play').addEventListener('click', () => {
+      if (!audios.length) return
+      if (playing) {
+        for (const a of audios) a.pause()
+        playing = false
+        $('play').textContent = '▶'
+      } else {
+        // Re-align before starting so stems can never drift apart.
+        syncTo(audios[0].currentTime)
+        for (const a of audios) void a.play().catch(() => {})
+        playing = true
+        $('play').textContent = '⏸'
+      }
+    })
+    $('seek').addEventListener('pointerdown', () => (seeking = true))
+    $('seek').addEventListener('change', () => {
+      const master = audios[0]
+      if (master && isFinite(master.duration)) {
+        syncTo(($('seek').value / 1000) * master.duration)
+      }
+      seeking = false
+    })
 
     async function exportOne(btn, wavPath, fmt, stem) {
       const old = btn.textContent
@@ -220,6 +313,7 @@
     $('all-flac').addEventListener('click', () => exportAll('flac'))
 
     win.addEventListener('unload', () => {
+      stopPreview()
       ampwin.stems.cancel(jobKey)
       offProgress?.()
     })
@@ -244,11 +338,12 @@
       </div>
       <div id="main">
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
-          <input type="checkbox" id="gpu" /> Use GPU (DirectML)
+          <input type="checkbox" id="gpu" /> Use GPU
         </label>
         <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
-          Runs separation on your graphics card — much faster than CPU.
-          Falls back to CPU automatically if the GPU can't run the model.
+          Runs separation on your graphics card (CUDA on NVIDIA, else DirectML).
+          Falls back to CPU automatically if the GPU can't run the model —
+          some very new GPUs aren't supported by DirectML yet.
         </div>
         <button id="stems-folder">open stems download folder…</button>
         <div style="font-size:11px;color:#9aa1ac;margin-top:14px">

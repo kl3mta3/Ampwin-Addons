@@ -5,6 +5,18 @@ The addon repository for [Ampwin](https://github.com/kl3mta3/Ampwin). Ampwin's
 filterable list, and installs the addon you pick — no app update needed. Add a
 new addon by pushing a folder and adding one entry to `index.json`.
 
+## Available addons
+
+| Addon | What it does |
+|---|---|
+| **Oscilloscope** | Green waveform visualizer (shows in the visualizer dropdown). |
+| **Demucs v4 Stems** | Right-click a local track ▸ *Demucs v4 ▸ Get stems* → separates Vocals / Drums / Bass / Melody (HTDemucs v4 fine-tuned, 4 specialist models ≈ 630 MB one-time download). Preview each stem, save as WAV/FLAC/MP3, Restem, download-all. GPU (DirectML) or CPU. |
+| **Demucs 6s Stems** | Same flow with the 6-source model (≈130 MB): Vocals / Drums / Bass / **Guitar** / **Piano** / Other. |
+
+The Demucs addons are independent — install either or both. Models download on
+first use into Ampwin's `userData/models`; separated stems cache so re-opening
+a song's stems is instant (Restem forces a fresh run).
+
 > The default repo URL is `https://github.com/kl3mta3/Ampwin-Addons`.
 > The **contents of this `addons-repo/` folder go at the root** of that repo.
 

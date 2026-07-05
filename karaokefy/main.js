@@ -64,6 +64,8 @@
     .lyric { font-size: 14px; line-height: 1.5; padding: 3px 6px; color: #8b93a0; border-radius: 3px; }
     .lyric.active { color: #fff; background: rgba(255,207,63,.14); font-weight: bold; }
     #footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid #000; background: #14171d; align-items: center; }
+    #add-pl { color: #ffcf3f; font-weight: bold; }
+    #rekar:hover { background: #2a3140; }
     .spacer { flex: 1; }
     .note { font-size: 11px; color: #6fd88f; }
     a.folder { color: #ffcf3f; font-size: 11px; cursor: pointer; -webkit-app-region: no-drag; }
@@ -109,9 +111,11 @@
         <div id="lyrics"></div>
       </div>
       <div id="footer" hidden>
+        <button id="rekar" title="Run the whole karaoke process again from scratch">↻ Re-karaokefy</button>
         <span class="note" id="lrc-note"></span>
         <span class="spacer"></span>
         <a class="folder" id="open-folder">karaoke folder</a>
+        <button id="add-pl" title="Save the instrumental and add it to your playlist">➕ Add to playlist</button>
         <button id="dl-mp3">Instrumental MP3</button>
         <button id="dl-wav">WAV</button>
         <button id="dl-flac">FLAC</button>
@@ -213,7 +217,8 @@
         for (const l of lines) addLyricEl(l)
         setStatus('3/3 found synced lyrics online ✓', 100)
       } else {
-        // No online match — transcribe the clean vocal stem with Whisper.
+        // No online match (or the lookup timed out) — transcribe with Whisper.
+        setStatus('3/3 no online lyrics found — transcribing vocals…', 62)
         offWhProg = ampwin.whisper.on('progress', (key, p) => {
           if (key !== whisperJob) return
           const label = p.phase === 'download' ? 'downloading Whisper (one-time)' : p.phase === 'decode' ? 'reading vocals' : 'transcribing lyrics'
@@ -374,6 +379,30 @@
     $('dl-mp3').addEventListener('click', (e) => exportInstrumental(e.target, 'mp3'))
     $('dl-wav').addEventListener('click', (e) => exportInstrumental(e.target, 'wav'))
     $('dl-flac').addEventListener('click', (e) => exportInstrumental(e.target, 'flac'))
+
+    async function addToPlaylist(btn) {
+      if (!instrumental) return
+      const old = btn.textContent
+      btn.disabled = true
+      btn.textContent = 'saving…'
+      try {
+        // Save the instrumental under a descriptive name, then add that file.
+        const stemLabel = (songName(track) + ' (instrumental)').replace(/[<>:"/\\|?*]/g, '_')
+        const savedPath = await ampwin.stems.export(instrumental.path, 'wav', songName(track), stemLabel, KARAOKE_DIR)
+        await ampwin.playlist.addPaths([savedPath])
+        btn.textContent = '✓ added'
+        setStatus('saved + added the karaoke instrumental to your playlist', null)
+      } catch (err) {
+        btn.textContent = old
+        setStatus('⚠ add to playlist failed: ' + (err.message || err), null)
+      }
+      setTimeout(() => {
+        btn.textContent = old
+        btn.disabled = false
+      }, 1800)
+    }
+    $('add-pl').addEventListener('click', (e) => addToPlaylist(e.target))
+    $('rekar').addEventListener('click', () => void run())
 
     win.addEventListener('unload', () => {
       stopPlayback()

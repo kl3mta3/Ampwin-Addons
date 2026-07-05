@@ -204,7 +204,12 @@
       setStatus('3/3 looking up synced lyrics online…', 62)
       let online = null
       try {
-        online = await ampwin.lyrics.fetchOnline(track)
+        // Never block on a stalled lookup — the main process caps it too, this is
+        // a hard belt-and-suspenders so we always move on to Whisper.
+        online = await Promise.race([
+          ampwin.lyrics.fetchOnline(track),
+          new Promise((resolve) => setTimeout(() => resolve(null), 12000))
+        ])
       } catch (e) {
         /* offline / miss — fall through to Whisper */
       }

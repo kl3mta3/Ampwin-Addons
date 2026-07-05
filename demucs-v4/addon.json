@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "demucs-v4",
   "name": "Demucs v4 Stems",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Split local songs into Vocals, Drums, Bass and Melody (HTDemucs v4). Fast by default; fine-tuned mode in settings. Right-click a track > Demucs v4 > Get stems.",
   "author": "kl3mta3",
   "entry": "main.js"

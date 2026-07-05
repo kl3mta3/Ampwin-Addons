@@ -63,6 +63,8 @@
     #prow { display: flex; align-items: center; gap: 8px; }
     #pbar { flex: 1; height: 14px; background: #0b0d10; border: 1px solid #000; border-radius: 3px; overflow: hidden; }
     #pfill { height: 100%; width: 0%; background: linear-gradient(90deg, #1f7a3f, #3fdf6f); transition: width .2s; }
+    #start { background: #1f7a3f; color: #eafff0; font-weight: bold; padding: 6px 14px; }
+    #start:hover { background: #269150; }
     #cancel { background: #3a1d1d; }
     #cancel:hover { background: #7f1f1f; }
     #transport { display: flex; align-items: center; gap: 10px; padding: 10px 4px 14px; }
@@ -106,9 +108,10 @@
         <button id="x" title="Close">×</button>
       </div>
       <div id="main">
-        <div id="status">starting…</div>
+        <div id="status">ready</div>
         <div id="prow">
-          <div id="pbar"><div id="pfill"></div></div>
+          <button id="start" title="Begin separating this song">▶ Start separation</button>
+          <div id="pbar" hidden><div id="pfill"></div></div>
           <button id="cancel" hidden title="Stop this separation">cancel</button>
         </div>
         <div id="transport" hidden>
@@ -132,6 +135,8 @@
     $('x').addEventListener('click', () => win.close())
     $('settings').addEventListener('click', openSettingsWindow)
     $('open-folder').addEventListener('click', () => ampwin.stems.openFolder())
+    $('start').addEventListener('click', () => void run(false))
+    $('status').textContent = 'ready — adjust ⚙ settings if you like, then press Start.'
 
     const jobKey = track.path + '::' + PACK.id
     let result = null
@@ -156,6 +161,8 @@
       $('transport').hidden = true
       $('stems').textContent = ''
       $('prow').style.display = ''
+      $('start').hidden = true
+      $('pbar').hidden = false
       $('cancel').hidden = false
       $('cancel').disabled = false
       $('cancel').textContent = 'cancel'
@@ -187,7 +194,10 @@
         $('footer').hidden = false
       } catch (err) {
         const msg = (err.message || String(err)).replace(/^Error invoking.*?: Error: /, '')
-        setStatus(cancelled || /cancel/i.test(msg) ? '■ cancelled' : '⚠ ' + msg, 0)
+        setStatus(cancelled || /cancel/i.test(msg) ? '■ cancelled — press Start to try again' : '⚠ ' + msg, 0)
+        // Return to the ready state so the user can adjust ⚙ and retry.
+        $('pbar').hidden = true
+        $('start').hidden = false
       }
       $('cancel').hidden = true
       offProgress?.()
@@ -361,8 +371,7 @@
       ampwin.stems.cancel(jobKey)
       offProgress?.()
     })
-
-    void run(false)
+    // Window opens idle — user reviews ⚙ settings, then presses Start to separate.
   }
 
   function openSettingsWindow() {

@@ -145,6 +145,7 @@
     }
 
     let cancelled = false
+    let gpuAutoDisabled = false
 
     async function run(force) {
       if (running) return
@@ -161,6 +162,11 @@
       setStatus('preparing…', 0)
       offProgress = ampwin.stems.on('progress', (key, p) => {
         if (key !== jobKey) return
+        // A GPU we know fails on this card — stop retrying it next time.
+        if (p.detail && /GPU error/i.test(p.detail) && useGpu()) {
+          setUseGpu(false)
+          gpuAutoDisabled = true
+        }
         const labels = {
           download: 'downloading model (one-time)',
           decode: 'decoding audio',
@@ -172,7 +178,11 @@
       try {
         result = await ampwin.stems.separate(track, PACK, { useGpu: useGpu(), force, jobKey })
         renderStems()
-        setStatus(result.fromCache && !force ? 'loaded from cache — previews below' : '✓ separation complete', 100)
+        const note = gpuAutoDisabled ? ' (GPU unsupported here — CPU from now on)' : ''
+        setStatus(
+          (result.fromCache && !force ? 'loaded from cache — previews below' : '✓ separation complete') + note,
+          100
+        )
         $('prow').style.display = 'none'
         $('footer').hidden = false
       } catch (err) {

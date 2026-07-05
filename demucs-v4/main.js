@@ -2,9 +2,13 @@
 //
 // Adds "Demucs v4 ▸ Get stems" to the right-click menu of local tracks.
 // Separation runs in Ampwin's stems engine (HTDemucs ONNX via onnxruntime,
-// CPU or DirectML GPU); this addon is the UI: a stems window with per-stem
-// previews + WAV/FLAC/MP3 downloads, Restem, download-all, and a settings
-// window. Model files download on first use (~630 MB for the ft bag).
+// CPU or DirectML GPU); this addon is the UI: a stems window with a synced
+// preview + per-stem mutes, WAV/FLAC/MP3 downloads, Restem, download-all, cancel,
+// and a settings window. Vocals / Drums / Bass / Melody.
+//
+// Two models: FAST (default) = single htdemucs (~300 MB, one pass — ~4× faster);
+// FINE-TUNED (opt-in in ⚙) = the 4-model specialist bag (~630 MB, best quality,
+// much slower). Models download on first use.
 /* global ampwin */
 ;(() => {
   'use strict'
@@ -15,12 +19,22 @@
   const TITLE = 'Demucs v4 stems'
   const STEM_LABELS = { drums: '🥁 Drums', bass: '🎸 Bass', other: '🎹 Melody', vocals: '🎤 Vocals' }
   const HF = 'https://huggingface.co/StemSplitio'
-  const PACK = {
+  const SOURCES = ['drums', 'bass', 'other', 'vocals']
+  // Fast single-file model — one pass produces all 4 stems.
+  const FAST_PACK = {
+    id: 'htdemucs',
+    label: 'HTDemucs v4 (fast)',
+    kind: 'single',
+    sources: SOURCES,
+    files: [{ url: `${HF}/htdemucs-onnx/resolve/main/htdemucs_fp16weights.onnx`, file: 'htdemucs_fp16weights.onnx' }]
+  }
+  // Fine-tuned specialist bag — 4 models, best quality, ~4× slower.
+  const FT_PACK = {
     id: 'htdemucs-ft',
     label: 'HTDemucs v4 (fine-tuned)',
     kind: 'bag',
-    sources: ['drums', 'bass', 'other', 'vocals'],
-    files: ['drums', 'bass', 'other', 'vocals'].map((stem) => ({
+    sources: SOURCES,
+    files: SOURCES.map((stem) => ({
       url: `${HF}/htdemucs-ft-${stem}-onnx/resolve/main/htdemucs_ft_${stem}_fp16weights.onnx`,
       file: `htdemucs_ft_${stem}_fp16weights.onnx`,
       stem
@@ -28,9 +42,13 @@
   }
   // ---------------------------------------------------------------------------
 
-  // Default OFF: CPU is reliable and reasonably fast (~a few seconds per chunk).
-  // GPU (DirectML) is an opt-in speedup — great on stable cards, but slow/
-  // unstable on brand-new GPUs whose DirectML kernels aren't optimized yet.
+  // Fine-tuned mode — OFF by default (fast single model). ON uses the slow bag.
+  const ftMode = () => localStorage.getItem(ADDON_ID + ':ft') === 'on'
+  const setFtMode = (on) => localStorage.setItem(ADDON_ID + ':ft', on ? 'on' : 'off')
+  const getPack = () => (ftMode() ? FT_PACK : FAST_PACK)
+
+  // GPU default OFF: CPU is reliable and reasonably fast. DirectML is an opt-in
+  // speedup — great on stable cards, but slow/unstable on brand-new GPUs.
   const useGpu = () => localStorage.getItem(ADDON_ID + ':useGpu') === 'on'
   const setUseGpu = (on) => localStorage.setItem(ADDON_ID + ':useGpu', on ? 'on' : 'off')
 
@@ -124,7 +142,9 @@
     $('settings').addEventListener('click', openSettingsWindow)
     $('open-folder').addEventListener('click', () => ampwin.stems.openFolder())
 
-    const jobKey = track.path + '::' + PACK.id
+    // Resolved per separation (fast vs fine-tuned can change in ⚙ between runs).
+    let pack = getPack()
+    let jobKey = track.path + '::' + pack.id
     let result = null
     let offProgress = null
     let running = false
@@ -136,11 +156,15 @@
     }
 
     let cancelled = false
+    let gpuAutoDisabled = false
 
     async function run(force) {
       if (running) return
       running = true
       cancelled = false
+      // Re-resolve the model in case ⚙ toggled fast↔fine-tuned since last run.
+      pack = getPack()
+      jobKey = track.path + '::' + pack.id
       stopPreview()
       $('footer').hidden = true
       $('transport').hidden = true
@@ -152,6 +176,11 @@
       setStatus('preparing…', 0)
       offProgress = ampwin.stems.on('progress', (key, p) => {
         if (key !== jobKey) return
+        // A GPU we know fails on this card — stop retrying it next time.
+        if (p.detail && /GPU error/i.test(p.detail) && useGpu()) {
+          setUseGpu(false)
+          gpuAutoDisabled = true
+        }
         const labels = {
           download: 'downloading model (one-time)',
           decode: 'decoding audio',
@@ -161,9 +190,13 @@
         setStatus(`${labels[p.phase] || p.phase}… ${p.percent}%${p.detail ? ' — ' + p.detail : ''}`, p.percent)
       })
       try {
-        result = await ampwin.stems.separate(track, PACK, { useGpu: useGpu(), force, jobKey })
+        result = await ampwin.stems.separate(track, pack, { useGpu: useGpu(), force, jobKey })
         renderStems()
-        setStatus(result.fromCache && !force ? 'loaded from cache — previews below' : '✓ separation complete', 100)
+        const note = gpuAutoDisabled ? ' (GPU unsupported here — CPU from now on)' : ''
+        setStatus(
+          (result.fromCache && !force ? 'loaded from cache — previews below' : '✓ separation complete') + note,
+          100
+        )
         $('prow').style.display = 'none'
         $('footer').hidden = false
       } catch (err) {
@@ -214,7 +247,7 @@
       $('play').textContent = '▶'
       $('seek').value = 0
 
-      for (const name of PACK.sources) {
+      for (const name of pack.sources) {
         const info = result.stems[name]
         const audio = doc.createElement('audio')
         audio.preload = 'auto'
@@ -319,7 +352,7 @@
 
     async function exportAll(fmt) {
       if (!result) return
-      for (const name of PACK.sources) {
+      for (const name of pack.sources) {
         setStatus(`saving ${name}.${fmt}…`, null)
         try {
           await ampwin.stems.export(result.stems[name].path, fmt, songName(track), name)
@@ -354,7 +387,7 @@
     const style = doc.createElement('style')
     style.textContent = CSS
     doc.head.appendChild(style)
-    sw.resizeTo(420, 260)
+    sw.resizeTo(440, 340)
     doc.body.innerHTML = `
       <div id="bar">
         <span id="logo">SETTINGS</span>
@@ -363,21 +396,29 @@
       </div>
       <div id="main">
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
+          <input type="checkbox" id="ft" /> Fine-tuned models (best quality, ~4× slower)
+        </label>
+        <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
+          Off = the fast single model (~300&nbsp;MB, one pass). On = the 4-model
+          fine-tuned bag (~630&nbsp;MB, highest quality but roughly 4× slower to
+          separate). Each downloads on first use; switching re-separates.
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
           <input type="checkbox" id="gpu" /> Use GPU (DirectML) — experimental
         </label>
         <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
-          Off by default. CPU is reliable and reasonably fast. Turning this on
-          uses your graphics card via DirectML — a big speedup on well-supported
-          GPUs, but on brand-new cards (e.g. RTX 50-series) DirectML is currently
-          slower than CPU and can crash mid-run; it falls back to CPU if so.
+          Off by default. CPU is reliable and reasonably fast. On uses your GPU
+          via DirectML — a big speedup on well-supported cards, but on brand-new
+          GPUs (e.g. RTX 50-series) it's currently slower than CPU and can crash
+          mid-run; it falls back to CPU automatically.
         </div>
         <button id="stems-folder">open stems download folder…</button>
-        <div style="font-size:11px;color:#9aa1ac;margin-top:14px">
-          Model: ${PACK.label} (${PACK.files.length} file${PACK.files.length > 1 ? 's' : ''}, downloads on first use)
-        </div>
       </div>`
     const $ = (id) => doc.getElementById(id)
     $('x').addEventListener('click', () => sw.close())
+    const ft = $('ft')
+    ft.checked = ftMode()
+    ft.addEventListener('change', () => setFtMode(ft.checked))
     const gpu = $('gpu')
     gpu.checked = useGpu()
     gpu.addEventListener('change', () => setUseGpu(gpu.checked))

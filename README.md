@@ -17,9 +17,6 @@ The Demucs addons are independent — install either or both. Models download on
 first use into Ampwin's `userData/models`; separated stems cache so re-opening
 a song's stems is instant (Restem forces a fresh run).
 
-> The default repo URL is `https://github.com/kl3mta3/Ampwin-Addons`.
-> The **contents of this `addons-repo/` folder go at the root** of that repo.
-
 ## Repository layout
 
 ```
@@ -95,10 +92,6 @@ ampwin.visualizer.registerPlugin({
   }
 })
 ```
-
-The addon's visualizer appears in the visualizer dropdown and **stays available
-across skin switches**. Disabling or uninstalling the addon removes it and its
-plugins cleanly.
 
 Addons can use any part of `ampwin` (player, playlist, files, links, convert,
 system, addons, …), so they're not limited to visualizers — but keep them small

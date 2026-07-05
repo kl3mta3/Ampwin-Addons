@@ -3,10 +3,10 @@
 // Right-click a local track ▸ Karaokefy ▸ Make karaoke. In one window:
 //   1. Demucs (fast htdemucs) splits the song into vocals/drums/bass/other.
 //   2. The 3 non-vocal stems are summed into an INSTRUMENTAL (ampwin.stems.mix).
-//   3. The clean VOCAL stem is transcribed by Whisper (ampwin.whisper) into
-//      timestamped lines — streamed live into the window as they decode.
-//   4. The lines are saved as a <song>.lrc sidecar (ampwin.lyrics.writeSidecar),
-//      which the player then shows over the visualizer automatically.
+//   3. Synced lyrics are fetched online — the same instant get the app uses
+//      (ampwin.lyrics.fetchOnline → LRCLIB).
+//   4. The lyrics + .lrc are saved into the app's Karaoke downloads folder
+//      (appdata) alongside the instrumental — never the source's folder.
 // You get an instrumental karaoke track to sing over + the synced lyrics.
 /* global ampwin */
 ;(() => {
@@ -28,9 +28,6 @@
   // GPU (DirectML) for the Demucs step — OFF by default (CPU is reliable).
   const useGpu = () => localStorage.getItem(ADDON_ID + ':useGpu') === 'on'
   const setUseGpu = (on) => localStorage.setItem(ADDON_ID + ':useGpu', on ? 'on' : 'off')
-  // Whisper model — 'base' (better on singing) default, 'tiny' (faster) optional.
-  const model = () => localStorage.getItem(ADDON_ID + ':model') || 'base'
-  const setModel = (m) => localStorage.setItem(ADDON_ID + ':model', m)
   const KARAOKE_DIR = 'Karaoke'
 
   const CSS = `
@@ -130,15 +127,12 @@
     $('status').textContent = 'ready — adjust ⚙ settings if you like, then press Make karaoke.'
 
     const stemsJob = track.path + '::' + PACK.id
-    const whisperJob = track.path + '::karaoke-whisper'
     let running = false
     let cancelled = false
     let instrumental = null // { path, url }
     let lines = []
     let audio = null
     let offStems = null
-    let offWhProg = null
-    let offWhSeg = null
 
     const setStatus = (text, pct) => {
       if (win.closed) return
@@ -200,60 +194,32 @@
       }
       if (cancelled) return fail(new Error('cancelled'))
 
-      // ---- 3. Lyrics: accurate LRCLIB lookup first, Whisper as fallback ---
-      setStatus('3/3 looking up synced lyrics online…', 62)
+      // ---- 3. Lyrics: fetch online (the same instant get the app uses) -----
+      setStatus('3/3 looking up synced lyrics online…', 85)
       let online = null
       try {
-        // Never block on a stalled lookup — the main process caps it too, this is
-        // a hard belt-and-suspenders so we always move on to Whisper.
-        online = await Promise.race([
-          ampwin.lyrics.fetchOnline(track),
-          new Promise((resolve) => setTimeout(() => resolve(null), 12000))
-        ])
+        online = await ampwin.lyrics.fetchOnline(track)
       } catch (e) {
-        /* offline / miss — fall through to Whisper */
+        /* offline / miss — karaoke still works without lyrics */
       }
       if (cancelled) return fail(new Error('cancelled'))
 
+      let lrcPath = ''
       if (online && online.synced && online.lines.length) {
         lines = online.lines
-        fromOnline = true
         $('lyrics').textContent = ''
         for (const l of lines) addLyricEl(l)
-        setStatus('3/3 found synced lyrics online ✓', 100)
-      } else {
-        // No online match (or the lookup timed out) — transcribe with Whisper.
-        setStatus('3/3 no online lyrics found — transcribing vocals…', 62)
-        offWhProg = ampwin.whisper.on('progress', (key, p) => {
-          if (key !== whisperJob) return
-          const label = p.phase === 'download' ? 'downloading Whisper (one-time)' : p.phase === 'decode' ? 'reading vocals' : 'transcribing lyrics'
-          setStatus(`3/3 ${label}… ${p.percent}%${p.detail && p.phase === 'download' ? ' — ' + p.detail : ''}`, 60 + p.percent * 0.4)
-        })
-        offWhSeg = ampwin.whisper.on('segment', (key, line) => {
-          if (key !== whisperJob) return
-          lines.push(line)
-          addLyricEl(line)
-        })
-        let result
+        setStatus('3/3 found synced lyrics ✓', 100)
+        // Save the .lrc into OUR downloads/Karaoke folder — never the source file's
+        // folder (it may be a slow/read-only network share).
         try {
-          result = await ampwin.whisper.transcribe(track.path, { jobKey: whisperJob, model: model() })
-        } catch (err) {
-          return fail(err)
-        } finally {
-          offWhProg?.()
-          offWhSeg?.()
-          offWhProg = offWhSeg = null
+          lrcPath = await ampwin.lyrics.saveLrc(songName(track), lines, KARAOKE_DIR)
+        } catch (e) {
+          /* non-fatal — lyrics still shown */
         }
-        if (cancelled) return fail(new Error('cancelled'))
-        lines = result.lines
-      }
-
-      // ---- 4. Save the .lrc sidecar next to the song ----------------------
-      let lrcPath = ''
-      try {
-        if (lines.length) lrcPath = await ampwin.lyrics.writeSidecar(track.path, lines)
-      } catch (err) {
-        /* non-fatal — still show the karaoke */
+      } else {
+        lines = []
+        setStatus('3/3 no synced lyrics found for this song', 100)
       }
 
       finishUp(lrcPath)
@@ -288,10 +254,10 @@
       $('transport').hidden = false
       $('footer').hidden = false
       $('lrc-note').textContent = lrcPath
-        ? '✓ lyrics saved next to your song (shown over the visualizer)'
+        ? '✓ synced lyrics + .lrc saved to the Karaoke folder'
         : lines.length
-          ? '⚠ could not save .lrc next to the song'
-          : 'no lyrics detected (instrumental?)'
+          ? '✓ synced lyrics found'
+          : 'no synced lyrics found for this song'
     }
 
     // ---- instrumental playback + synced lyric highlight --------------------
@@ -360,7 +326,6 @@
       $('cancel').textContent = 'cancelling…'
       setStatus('cancelling…', null)
       ampwin.stems.cancel(stemsJob)
-      ampwin.whisper.cancel(whisperJob)
     })
 
     async function exportInstrumental(btn, fmt) {
@@ -412,10 +377,7 @@
     win.addEventListener('unload', () => {
       stopPlayback()
       ampwin.stems.cancel(stemsJob)
-      ampwin.whisper.cancel(whisperJob)
       offStems?.()
-      offWhProg?.()
-      offWhSeg?.()
     })
     // Window opens idle — user reviews ⚙ settings, then presses Make karaoke.
   }
@@ -437,31 +399,24 @@
       </div>
       <div id="main">
         <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
-          <input type="checkbox" id="tiny" /> Faster lyrics (Whisper "tiny" model — quicker, weaker on singing)
-        </label>
-        <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
-          Off (default) = the "base" model (~148&nbsp;MB, more accurate on sung
-          vocals). On = "tiny" (~78&nbsp;MB), faster but sloppier on singing. Whisper
-          is imperfect on music — the model downloads on first use.
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:13px;-webkit-app-region:no-drag;cursor:pointer">
           <input type="checkbox" id="gpu" /> Use GPU (DirectML) for the split — experimental
         </label>
         <div style="font-size:11px;color:#9aa1ac;margin:6px 0 14px">
           Off by default. CPU is reliable; DirectML is a speedup on well-supported
           cards but unstable on brand-new GPUs (falls back to CPU automatically).
         </div>
-        <button id="stems-folder">open stems download folder…</button>
+        <div style="font-size:11px;color:#9aa1ac;margin:0 0 14px">
+          Lyrics are fetched online (LRCLIB) and saved with the instrumental in the
+          Karaoke downloads folder.
+        </div>
+        <button id="stems-folder">open karaoke download folder…</button>
       </div>`
     const $ = (id) => doc.getElementById(id)
     $('x').addEventListener('click', () => sw.close())
-    const tiny = $('tiny')
-    tiny.checked = model() === 'tiny'
-    tiny.addEventListener('change', () => setModel(tiny.checked ? 'tiny' : 'base'))
     const gpu = $('gpu')
     gpu.checked = useGpu()
     gpu.addEventListener('change', () => setUseGpu(gpu.checked))
-    $('stems-folder').addEventListener('click', () => ampwin.stems.openFolder())
+    $('stems-folder').addEventListener('click', () => ampwin.stems.openFolder(KARAOKE_DIR))
   }
 
   ampwin.menus.registerTrackMenu({

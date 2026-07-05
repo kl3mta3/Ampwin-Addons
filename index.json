@@ -35,15 +35,6 @@
       "author": "kl3mta3",
       "entry": "main.js",
       "files": ["addon.json", "main.js"]
-    },
-    {
-      "id": "auto-lyrics",
-      "name": "Auto Lyrics",
-      "version": "1.0.1",
-      "description": "Live on-screen lyrics for whatever's playing: transcribes the current local song with Whisper and shows the lines synced over the visualizer. Ephemeral (not saved). Enable to turn on; disable to stop.",
-      "author": "kl3mta3",
-      "entry": "main.js",
-      "files": ["addon.json", "main.js"]
     }
   ]
 }

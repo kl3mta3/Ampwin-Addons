@@ -12,7 +12,7 @@
     {
       "id": "demucs-v4",
       "name": "Demucs v4 Stems",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "description": "Split local songs into Vocals, Drums, Bass and Melody (HTDemucs v4). Fast by default; fine-tuned mode in settings. Right-click a track > Demucs v4 > Get stems.",
       "author": "kl3mta3",
       "entry": "main.js",
@@ -21,8 +21,26 @@
     {
       "id": "demucs-6s",
       "name": "Demucs 6s Stems",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "description": "Split local songs into 6 stems - Vocals, Drums, Bass, Guitar, Piano, Other (HTDemucs 6s). Right-click a track > Demucs 6s > Get stems.",
+      "author": "kl3mta3",
+      "entry": "main.js",
+      "files": ["addon.json", "main.js"]
+    },
+    {
+      "id": "karaokefy",
+      "name": "Karaokefy",
+      "version": "1.0.4",
+      "description": "Turn a local song into karaoke: split with Demucs, mix an instrumental, transcribe the vocals with Whisper, and save synced .lrc lyrics. Right-click a track > Karaokefy > Make karaoke.",
+      "author": "kl3mta3",
+      "entry": "main.js",
+      "files": ["addon.json", "main.js"]
+    },
+    {
+      "id": "auto-lyrics",
+      "name": "Auto Lyrics",
+      "version": "1.0.1",
+      "description": "Live on-screen lyrics for whatever's playing: transcribes the current local song with Whisper and shows the lines synced over the visualizer. Ephemeral (not saved). Enable to turn on; disable to stop.",
       "author": "kl3mta3",
       "entry": "main.js",
       "files": ["addon.json", "main.js"]

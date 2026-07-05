@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "karaokefy",
   "name": "Karaokefy",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "description": "Turn a local song into karaoke: split with Demucs, mix an instrumental, transcribe the vocals with Whisper, and save synced .lrc lyrics. Right-click a track > Karaokefy > Make karaoke.",
   "author": "kl3mta3",
   "entry": "main.js"

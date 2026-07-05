@@ -129,10 +129,13 @@
     const stemsJob = track.path + '::' + PACK.id
     let running = false
     let cancelled = false
-    let instrumental = null // { path, url }
+    let instrumental = null // { path, url } — the cached mix used for preview
+    let karaokePath = '' // saved "<song> (karaoke).mp3" in downloads/Karaoke
     let lines = []
     let audio = null
     let offStems = null
+
+    const safeName = (s) => (s || 'song').replace(/[<>:"/\\|?*]/g, '_')
 
     const setStatus = (text, pct) => {
       if (win.closed) return
@@ -155,6 +158,7 @@
       cancelled = false
       lines = []
       instrumental = null
+      karaokePath = ''
       stopPlayback()
       $('lyrics').textContent = ''
       $('transport').hidden = true
@@ -204,25 +208,31 @@
       }
       if (cancelled) return fail(new Error('cancelled'))
 
-      let lrcPath = ''
       if (online && online.synced && online.lines.length) {
         lines = online.lines
         $('lyrics').textContent = ''
         for (const l of lines) addLyricEl(l)
-        setStatus('3/3 found synced lyrics ✓', 100)
-        // Save the .lrc into OUR downloads/Karaoke folder — never the source file's
-        // folder (it may be a slow/read-only network share).
-        try {
-          lrcPath = await ampwin.lyrics.saveLrc(songName(track), lines, KARAOKE_DIR)
-        } catch (e) {
-          /* non-fatal — lyrics still shown */
-        }
+        setStatus('3/3 found synced lyrics ✓', 90)
       } else {
         lines = []
-        setStatus('3/3 no synced lyrics found for this song', 100)
+        setStatus('3/3 no synced lyrics found', 90)
       }
 
-      finishUp(lrcPath)
+      // ---- 4. Save the KARAOKE track (+ its .lrc sidecar) to appdata -------
+      // This is when the karaoke file is created: "<song> (karaoke).mp3" plus a
+      // matching "<song> (karaoke).lrc" right beside it, in downloads/Karaoke.
+      // "Add to playlist" then just adds this already-made file.
+      try {
+        setStatus('saving karaoke track…', 95)
+        const name = safeName(songName(track) + ' (karaoke)')
+        karaokePath = await ampwin.stems.export(instrumental.path, 'mp3', songName(track), name, KARAOKE_DIR)
+        if (lines.length) await ampwin.lyrics.writeSidecar(karaokePath, lines) // "<...> (karaoke).lrc"
+      } catch (err) {
+        /* non-fatal — window still works, Add-to-playlist will report if empty */
+      }
+      if (cancelled) return fail(new Error('cancelled'))
+
+      finishUp(lines.length > 0)
     }
 
     function fail(err) {
@@ -234,7 +244,7 @@
       running = false
     }
 
-    function finishUp(lrcPath) {
+    function finishUp(hasLyrics) {
       running = false
       $('cancel').hidden = true
       $('pbar').style.width = '100%'
@@ -253,9 +263,11 @@
       })
       $('transport').hidden = false
       $('footer').hidden = false
-      $('lrc-note').textContent = lrcPath
-        ? '✓ synced lyrics + .lrc saved to the Karaoke folder'
-        : lines.length
+      $('lrc-note').textContent = karaokePath
+        ? hasLyrics
+          ? '✓ karaoke track + synced .lrc saved to the Karaoke folder'
+          : '✓ karaoke track saved (no synced lyrics found for this song)'
+        : hasLyrics
           ? '✓ synced lyrics found'
           : 'no synced lyrics found for this song'
     }
@@ -328,15 +340,17 @@
       ampwin.stems.cancel(stemsJob)
     })
 
+    // Instrumental downloads: "<song> (instrumental).<fmt>" — just the audio.
     async function exportInstrumental(btn, fmt) {
       if (!instrumental) return
       const old = btn.textContent
       btn.disabled = true
       btn.textContent = '…'
       try {
-        await ampwin.stems.export(instrumental.path, fmt, songName(track), 'instrumental', KARAOKE_DIR)
+        const name = safeName(songName(track) + ' (instrumental)')
+        await ampwin.stems.export(instrumental.path, fmt, songName(track), name, KARAOKE_DIR)
         btn.textContent = '✓'
-        setStatus(`saved instrumental.${fmt} → downloads/Karaoke`, null)
+        setStatus(`saved ${name}.${fmt} → downloads/Karaoke`, null)
       } catch (err) {
         btn.textContent = old
         setStatus('⚠ export failed: ' + (err.message || err), null)
@@ -350,18 +364,17 @@
     $('dl-wav').addEventListener('click', (e) => exportInstrumental(e.target, 'wav'))
     $('dl-flac').addEventListener('click', (e) => exportInstrumental(e.target, 'flac'))
 
+    // The karaoke track (+ its .lrc) was already created during "Make karaoke";
+    // this just adds that file to the playlist.
     async function addToPlaylist(btn) {
-      if (!instrumental) return
+      if (!karaokePath) return
       const old = btn.textContent
       btn.disabled = true
-      btn.textContent = 'saving…'
+      btn.textContent = 'adding…'
       try {
-        // Save the instrumental under a descriptive name, then add that file.
-        const stemLabel = (songName(track) + ' (instrumental)').replace(/[<>:"/\\|?*]/g, '_')
-        const savedPath = await ampwin.stems.export(instrumental.path, 'wav', songName(track), stemLabel, KARAOKE_DIR)
-        await ampwin.playlist.addPaths([savedPath])
+        await ampwin.playlist.addPaths([karaokePath])
         btn.textContent = '✓ added'
-        setStatus('saved + added the karaoke instrumental to your playlist', null)
+        setStatus(lines.length ? 'added the karaoke track (with .lrc lyrics) to your playlist' : 'added the karaoke track to your playlist', null)
       } catch (err) {
         btn.textContent = old
         setStatus('⚠ add to playlist failed: ' + (err.message || err), null)

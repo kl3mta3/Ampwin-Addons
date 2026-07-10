@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.0'
+  const VERSION = '1.0.1'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -229,10 +229,50 @@
 
   function installIntoSkin() {
     const doc = currentSkinDocument()
-    if (!doc?.body) return
+    if (!doc?.body) {
+      installHostFallback()
+      return
+    }
     state.skinDoc = doc
     installLaunchButton(doc)
+    if (doc.getElementById('plexify-launch')) removeHostFallback()
     if (state.modalOpen) mountModal(doc)
+  }
+
+  // Fallback for skins whose document cannot be extended. The shell overlay is
+  // above every skin; pointer-events is restored only for this one button.
+  function installHostFallback() {
+    try {
+      const host = window.parent.document
+      const layer = host.getElementById('overlay-layer')
+      if (!layer || host.getElementById('plexify-host-launch')) return
+      const button = host.createElement('button')
+      button.id = 'plexify-host-launch'
+      button.textContent = 'Plexify'
+      button.title = 'Browse and play your Plex libraries'
+      Object.assign(button.style, {
+        pointerEvents: 'auto',
+        position: 'absolute',
+        right: '104px',
+        bottom: '5px',
+        zIndex: '2147483000',
+        padding: '4px 10px',
+        background: 'linear-gradient(#2a2e37, #1a1d23)',
+        color: '#c8ccd4',
+        border: '1px solid #3a3f4b',
+        borderRadius: '3px',
+        font: '12px Segoe UI, sans-serif',
+        cursor: 'pointer'
+      })
+      button.addEventListener('click', toggleModal)
+      layer.appendChild(button)
+    } catch (error) {
+      console.error('Plexify could not install its fallback button', error)
+    }
+  }
+
+  function removeHostFallback() {
+    try { window.parent.document.getElementById('plexify-host-launch')?.remove() } catch {}
   }
 
   function installLaunchButton(doc) {
@@ -435,6 +475,20 @@
     })
 
     ui('sidebar').classList.toggle('collapsed', state.sidebarCollapsed)
+    if (!ampwin.network?.request) {
+      ui('sidebar').style.visibility = 'hidden'
+      ui('signout').hidden = true
+      setTitle('Ampwin update required')
+      setMain(`
+        <div class="px-login">
+          <div class="px-login-card">
+            <div class="px-login-logo">PLEXIFY</div>
+            <h2>Network bridge unavailable</h2>
+            <p>This running Ampwin build does not expose <code>ampwin.network.request</code>. Rebuild and restart Ampwin after adding the generic HTTP bridge, then disable and re-enable Plexify.</p>
+          </div>
+        </div>`)
+      return
+    }
     if (localStorage.getItem(STORAGE.userToken)) void initializeSession(false)
     else renderLogin()
   }
@@ -911,11 +965,14 @@
   }
 
   function boot() {
-    if (!ampwin.network?.request) {
-      console.error('Plexify requires ampwin.network.request')
-      return
-    }
+    // The launch button is always installed. Missing host capabilities are
+    // reported inside Plexify instead of making the addon appear to do nothing.
     installIntoSkin()
+    if (!ampwin.network?.request) console.warn('Plexify: ampwin.network.request is unavailable')
+    setTimeout(() => {
+      const doc = currentSkinDocument()
+      if (!doc?.getElementById('plexify-launch')) installHostFallback()
+    }, 300)
     try {
       const layer = window.parent.document.getElementById('skin-layer')
       if (layer) {
@@ -924,12 +981,14 @@
       }
     } catch (error) {
       console.error('Plexify could not observe skin changes', error)
+      installHostFallback()
     }
   }
 
   window.addEventListener('unload', () => {
     state.observer?.disconnect()
     try { state.authWindow?.close() } catch {}
+    removeHostFallback()
     try {
       const host = window.parent.document
       host.querySelectorAll('#skin-layer iframe').forEach((frame) => {

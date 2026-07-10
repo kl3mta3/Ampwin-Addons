@@ -30,7 +30,8 @@
     route: null,
     history: [],
     routeNonce: 0,
-    contextMenu: null
+    contextMenu: null,
+    viewMode: 'grid'
   }
 
   const clientId = getOrCreate(STORAGE.clientId, () => crypto.randomUUID())
@@ -356,6 +357,8 @@
       flex-direction: column; overflow: hidden; background: var(--bg, #12161c);
       border: 1px solid var(--edge-hi, #4a5361); border-radius: 0;
       box-shadow: 0 18px 55px rgba(0,0,0,.65); }
+    #plexify-modal .px-drag-top { height: 6px; flex: 0 0 6px; -webkit-app-region: drag;
+      background: transparent; cursor: default; }
     #plexify-modal .px-header { height: 43px; flex: 0 0 43px; display: flex; align-items: center;
       -webkit-app-region: drag;
       gap: 7px; padding: 6px 8px; background: var(--bg-panel, #1b2028);
@@ -440,6 +443,26 @@
       padding: 8px 11px; color: #fff; background: rgba(12,15,19,.94); border: 1px solid #5f6977;
       border-radius: 5px; box-shadow: 0 6px 25px rgba(0,0,0,.5); }
     #plexify-modal .px-muted { color: var(--text-dim, #8992a1); }
+    #plexify-modal #px-view-mode { background: var(--bg-inset, #0a0c0e); color: var(--text, #c8ccd4);
+      border: 1px solid var(--edge-hi, #3a3f4b); font-size: 11px; padding: 2px 4px;
+      border-radius: 2px; max-width: 110px; }
+    #plexify-modal .px-list { font-family: Consolas, 'Courier New', monospace; font-size: 11px; }
+    #plexify-modal .px-list-row { display: flex; gap: 6px; padding: 2px 8px; cursor: default;
+      white-space: nowrap; color: #1f7f3f; align-items: center; }
+    #plexify-modal .px-list-row:nth-child(even) { background: rgba(255,255,255,.02); }
+    #plexify-modal .px-list-row:hover { background: rgba(63,223,111,.08); }
+    #plexify-modal .px-list-num { min-width: 30px; text-align: right; color: #7a8090; }
+    #plexify-modal .px-list-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    #plexify-modal .px-list-type { min-width: 55px; color: #7a8090; font-size: 10px;
+      text-transform: uppercase; }
+    #plexify-modal .px-list-dur { color: #7a8090; min-width: 42px; text-align: right; }
+    #plexify-modal .px-list-row.px-list-playable { color: #3fdf6f; cursor: pointer; }
+    #plexify-modal .px-list-row.px-list-container { color: #2d9f57; cursor: pointer; }
+    #plexify-modal .px-list-row.px-list-container:hover,
+    #plexify-modal .px-list-row.px-list-playable:hover { color: #5fff8f; }
+    #plexify-modal .px-list-section { padding: 8px 8px 4px; color: #8992a1; font-size: 10px;
+      text-transform: uppercase; letter-spacing: 1px; font-family: 'Segoe UI', sans-serif;
+      border-bottom: 1px solid rgba(127,127,127,.12); }
   `
 
   function mountModal(doc) {
@@ -461,11 +484,16 @@
     overlay.id = 'plexify-modal'
     overlay.innerHTML = `
       <div class="px-window" role="dialog" aria-label="Plexify">
+        <div class="px-drag-top"></div>
         <div class="px-header">
           <button id="px-menu" title="Collapse navigation">☰</button>
           <button id="px-back" title="Back" disabled>←</button>
           <span class="px-brand">PLEXIFY</span>
           <span class="px-title" id="px-title">Home</span>
+          <select id="px-view-mode" title="View mode">
+            <option value="grid" selected>Thumbnails</option>
+            <option value="list">List</option>
+          </select>
           <form class="px-search" id="px-search-form">
             <input id="px-search" type="search" placeholder="Search Plex" autocomplete="off" />
             <button type="submit">Search</button>
@@ -500,6 +528,10 @@
       ui('libraries-toggle').textContent = state.librariesCollapsed ? '▸' : '▾'
     })
     ui('server').addEventListener('change', (event) => void selectServer(event.target.value))
+    ui('view-mode').addEventListener('change', (event) => {
+      state.viewMode = event.target.value
+      if (state.route) void renderRoute(state.route)
+    })
     ui('signout').addEventListener('click', signOut)
     ui('search-form').addEventListener('submit', (event) => {
       event.preventDefault()
@@ -764,6 +796,10 @@
   }
 
   function renderHubs(hubs, emptyMessage = 'No Plex home items were returned') {
+    if (state.viewMode === 'list') {
+      renderHubsList(hubs, emptyMessage)
+      return
+    }
     const root = state.uiDoc.createElement('div')
     let count = 0
     for (const hub of hubs) {
@@ -784,7 +820,32 @@
     setMain(root)
   }
 
+  function renderHubsList(hubs, emptyMessage) {
+    const root = state.uiDoc.createElement('div')
+    root.className = 'px-list'
+    let count = 0
+    let globalIndex = 0
+    for (const hub of hubs) {
+      const items = hub.Metadata || hub.Directory || []
+      if (!items.length) continue
+      count += items.length
+      const header = state.uiDoc.createElement('div')
+      header.className = 'px-list-section'
+      header.textContent = hub.title || 'Plex'
+      root.appendChild(header)
+      for (const item of items) {
+        root.appendChild(createListRow(item, ++globalIndex))
+      }
+    }
+    if (!count) root.innerHTML = `<div class="px-empty">${escapeHtml(emptyMessage)}</div>`
+    setMain(root)
+  }
+
   function renderGrid(items, title) {
+    if (state.viewMode === 'list') {
+      renderGridList(items, title)
+      return
+    }
     const root = state.uiDoc.createElement('div')
     if (!items.length) {
       root.innerHTML = `<div class="px-empty">Nothing was found in ${escapeHtml(title)}</div>`
@@ -793,6 +854,71 @@
       for (const item of items) root.appendChild(createCard(item))
     }
     setMain(root)
+  }
+
+  function renderGridList(items, title) {
+    const root = state.uiDoc.createElement('div')
+    root.className = 'px-list'
+    if (!items.length) {
+      root.innerHTML = `<div class="px-empty">Nothing was found in ${escapeHtml(title)}</div>`
+    } else {
+      for (let i = 0; i < items.length; i++) {
+        root.appendChild(createListRow(items[i], i + 1))
+      }
+    }
+    setMain(root)
+  }
+
+  function createListRow(item, index) {
+    const row = state.uiDoc.createElement('div')
+    row.className = 'px-list-row'
+    row.title = cardTooltip(item)
+    if (isPlayable(item)) row.classList.add('px-list-playable')
+    else if (isContainer(item)) row.classList.add('px-list-container')
+
+    const num = state.uiDoc.createElement('span')
+    num.className = 'px-list-num'
+    num.textContent = String(index)
+
+    const name = state.uiDoc.createElement('span')
+    name.className = 'px-list-name'
+    const titleText = item.title || item.grandparentTitle || '(untitled)'
+    const sub = cardSubtitle(item)
+    name.textContent = sub ? `${titleText}  —  ${sub}` : titleText
+
+    const type = state.uiDoc.createElement('span')
+    type.className = 'px-list-type'
+    type.textContent = item.type || ''
+
+    const dur = state.uiDoc.createElement('span')
+    dur.className = 'px-list-dur'
+    dur.textContent = formatDuration(item.duration)
+
+    row.append(num, name, type, dur)
+
+    if (isContainer(item)) {
+      row.addEventListener('click', () => void navigate({
+        type: 'children',
+        title: item.title || item.grandparentTitle || 'Plex',
+        ratingKey: item.ratingKey
+      }))
+    }
+    if (isPlayable(item)) {
+      row.addEventListener('dblclick', () => void addToCurrent(item, true))
+      row.addEventListener('contextmenu', (event) => {
+        event.preventDefault()
+        void showContextMenu(item, event.clientX, event.clientY)
+      })
+    }
+    return row
+  }
+
+  function formatDuration(ms) {
+    if (!ms || ms <= 0) return ''
+    const totalSec = Math.round(ms / 1000)
+    const m = Math.floor(totalSec / 60)
+    const s = String(totalSec % 60).padStart(2, '0')
+    return `${m}:${s}`
   }
 
   function createCard(item) {

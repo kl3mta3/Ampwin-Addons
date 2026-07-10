@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.1'
+  const VERSION = '1.0.2'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -15,7 +15,8 @@
 
   const state = {
     modalOpen: false,
-    skinDoc: null,
+    uiDoc: null,
+    appWindow: null,
     overlay: null,
     observer: null,
     authWindow: null,
@@ -233,10 +234,8 @@
       installHostFallback()
       return
     }
-    state.skinDoc = doc
     installLaunchButton(doc)
     if (doc.getElementById('plexify-launch')) removeHostFallback()
-    if (state.modalOpen) mountModal(doc)
   }
 
   // Fallback for skins whose document cannot be extended. The shell overlay is
@@ -312,19 +311,40 @@
   }
 
   function toggleModal() {
-    state.modalOpen = !state.modalOpen
-    if (!state.modalOpen) {
-      closeModal()
+    if (state.appWindow && !state.appWindow.closed) {
+      state.appWindow.focus()
       return
     }
-    mountModal(currentSkinDocument())
+
+    const appWindow = window.open('about:blank', 'ampwin-addon-plexify')
+    if (!appWindow) {
+      console.error('Plexify could not open its addon window')
+      return
+    }
+
+    state.modalOpen = true
+    state.appWindow = appWindow
+    appWindow.document.title = 'Plexify'
+    appWindow.addEventListener('unload', () => {
+      if (state.appWindow !== appWindow) return
+      state.modalOpen = false
+      state.appWindow = null
+      state.overlay = null
+      state.uiDoc = null
+      state.contextMenu = null
+    })
+    mountModal(appWindow.document)
   }
 
   function closeModal() {
+    const appWindow = state.appWindow
     state.modalOpen = false
     removeContextMenu()
     state.overlay?.remove()
     state.overlay = null
+    state.uiDoc = null
+    state.appWindow = null
+    if (appWindow && !appWindow.closed) appWindow.close()
   }
 
   const MODAL_CSS = `
@@ -332,14 +352,15 @@
     #plexify-modal { position: fixed; inset: 0; z-index: 2147483600; display: flex;
       flex-direction: column; color: var(--text, #d5dae3); background: rgba(4,6,9,.78);
       font-family: inherit, "Segoe UI", sans-serif; font-size: 12px; user-select: none; }
-    #plexify-modal .px-window { margin: 18px; min-height: 0; flex: 1; display: flex;
+    #plexify-modal .px-window { margin: 0; min-height: 0; flex: 1; display: flex;
       flex-direction: column; overflow: hidden; background: var(--bg, #12161c);
-      border: 1px solid var(--edge-hi, #4a5361); border-radius: 7px;
+      border: 1px solid var(--edge-hi, #4a5361); border-radius: 0;
       box-shadow: 0 18px 55px rgba(0,0,0,.65); }
     #plexify-modal .px-header { height: 43px; flex: 0 0 43px; display: flex; align-items: center;
+      -webkit-app-region: drag;
       gap: 7px; padding: 6px 8px; background: var(--bg-panel, #1b2028);
       border-bottom: 1px solid var(--edge-lo, #000); }
-    #plexify-modal button, #plexify-modal select, #plexify-modal input { font: inherit; }
+    #plexify-modal button, #plexify-modal select, #plexify-modal input { font: inherit; -webkit-app-region: no-drag; }
     #plexify-modal button { cursor: pointer; }
     #plexify-modal .px-brand { color: #e5a00d; font-weight: 800; letter-spacing: .5px; }
     #plexify-modal .px-title { min-width: 90px; font-weight: 600; overflow: hidden;
@@ -412,6 +433,10 @@
 
   function mountModal(doc) {
     if (!doc?.body) return
+    doc.documentElement.style.width = '100%'
+    doc.documentElement.style.height = '100%'
+    doc.documentElement.style.overflow = 'hidden'
+    Object.assign(doc.body.style, { margin: '0', width: '100%', height: '100%', overflow: 'hidden', background: '#12161c' })
     doc.getElementById('plexify-modal')?.remove()
     let style = doc.getElementById('plexify-style')
     if (!style) {
@@ -449,7 +474,7 @@
       </div>`
     doc.body.appendChild(overlay)
     state.overlay = overlay
-    state.skinDoc = doc
+    state.uiDoc = doc
 
     ui('close').addEventListener('click', closeModal)
     ui('menu').addEventListener('click', () => {
@@ -615,7 +640,7 @@
     const serverSelect = ui('server')
     serverSelect.textContent = ''
     for (const server of state.servers) {
-      const option = state.skinDoc.createElement('option')
+      const option = state.uiDoc.createElement('option')
       option.value = server.id
       option.textContent = server.name
       option.selected = server.id === state.server?.id
@@ -626,7 +651,7 @@
     list.textContent = ''
     list.hidden = state.librariesCollapsed
     for (const library of state.libraries) {
-      const button = state.skinDoc.createElement('button')
+      const button = state.uiDoc.createElement('button')
       button.className = 'px-library'
       button.textContent = `${libraryIcon(library.type)} ${library.title}`
       button.addEventListener('click', () => void navigate({
@@ -693,17 +718,17 @@
   }
 
   function renderHubs(hubs, emptyMessage = 'No Plex home items were returned') {
-    const root = state.skinDoc.createElement('div')
+    const root = state.uiDoc.createElement('div')
     let count = 0
     for (const hub of hubs) {
       const items = hub.Metadata || hub.Directory || []
       if (!items.length) continue
       count += items.length
-      const section = state.skinDoc.createElement('section')
+      const section = state.uiDoc.createElement('section')
       section.className = 'px-hub'
-      const heading = state.skinDoc.createElement('h2')
+      const heading = state.uiDoc.createElement('h2')
       heading.textContent = hub.title || 'Plex'
-      const row = state.skinDoc.createElement('div')
+      const row = state.uiDoc.createElement('div')
       row.className = 'px-row'
       for (const item of items) row.appendChild(createCard(item))
       section.append(heading, row)
@@ -714,7 +739,7 @@
   }
 
   function renderGrid(items, title) {
-    const root = state.skinDoc.createElement('div')
+    const root = state.uiDoc.createElement('div')
     if (!items.length) {
       root.innerHTML = `<div class="px-empty">Nothing was found in ${escapeHtml(title)}</div>`
     } else {
@@ -725,34 +750,34 @@
   }
 
   function createCard(item) {
-    const card = state.skinDoc.createElement('article')
+    const card = state.uiDoc.createElement('article')
     card.className = 'px-card'
     card.dataset.type = item.type || ''
     card.title = cardTooltip(item)
 
-    const poster = state.skinDoc.createElement('div')
+    const poster = state.uiDoc.createElement('div')
     poster.className = 'px-poster'
     const art = item.thumb || item.parentThumb || item.grandparentThumb
     if (art) {
-      const image = state.skinDoc.createElement('img')
+      const image = state.uiDoc.createElement('img')
       image.loading = 'lazy'
       image.alt = ''
       image.src = authenticatedUrl(art)
       poster.appendChild(image)
     }
     if (item.viewOffset > 0 && item.duration > 0) {
-      const progress = state.skinDoc.createElement('div')
+      const progress = state.uiDoc.createElement('div')
       progress.className = 'px-progress'
-      const fill = state.skinDoc.createElement('span')
+      const fill = state.uiDoc.createElement('span')
       fill.style.width = `${Math.min(100, (item.viewOffset / item.duration) * 100)}%`
       progress.appendChild(fill)
       poster.appendChild(progress)
     }
 
-    const title = state.skinDoc.createElement('div')
+    const title = state.uiDoc.createElement('div')
     title.className = 'px-card-title'
     title.textContent = item.title || item.grandparentTitle || '(untitled)'
-    const subtitle = state.skinDoc.createElement('div')
+    const subtitle = state.uiDoc.createElement('div')
     subtitle.className = 'px-card-subtitle'
     subtitle.textContent = cardSubtitle(item)
     card.append(poster, title, subtitle)
@@ -888,9 +913,9 @@
 
   async function showContextMenu(item, x, y) {
     removeContextMenu()
-    const menu = state.skinDoc.createElement('div')
+    const menu = state.uiDoc.createElement('div')
     menu.className = 'px-context'
-    const view = state.skinDoc.defaultView
+    const view = state.uiDoc.defaultView
     menu.style.left = `${Math.max(4, Math.min(x, (view?.innerWidth || 680) - 290))}px`
     menu.style.top = `${Math.max(4, Math.min(y, (view?.innerHeight || 560) - 260))}px`
     state.overlay.appendChild(menu)
@@ -898,9 +923,9 @@
 
     addContextAction(menu, '▶ Play now', () => addToCurrent(item, true))
     addContextAction(menu, '＋ Add to current playlist', () => addToCurrent(item, false))
-    const divider = state.skinDoc.createElement('hr')
+    const divider = state.uiDoc.createElement('hr')
     menu.appendChild(divider)
-    const label = state.skinDoc.createElement('div')
+    const label = state.uiDoc.createElement('div')
     label.className = 'px-context-label'
     label.textContent = 'Add to saved playlist'
     menu.appendChild(label)
@@ -909,7 +934,7 @@
       const playlists = await ampwin.playlist.saved.list()
       if (!menu.isConnected) return
       if (!playlists.length) {
-        const empty = state.skinDoc.createElement('div')
+        const empty = state.uiDoc.createElement('div')
         empty.className = 'px-context-label'
         empty.textContent = 'No saved playlists'
         menu.appendChild(empty)
@@ -922,7 +947,7 @@
         })
       }
     } catch (error) {
-      const failed = state.skinDoc.createElement('div')
+      const failed = state.uiDoc.createElement('div')
       failed.className = 'px-context-label'
       failed.textContent = error?.message || String(error)
       menu.appendChild(failed)
@@ -930,7 +955,7 @@
   }
 
   function addContextAction(menu, label, action) {
-    const button = state.skinDoc.createElement('button')
+    const button = state.uiDoc.createElement('button')
     button.textContent = label
     button.addEventListener('click', () => {
       removeContextMenu()
@@ -948,7 +973,7 @@
     const main = ui('main')
     if (!main) return
     main.querySelector('.px-toast')?.remove()
-    const el = state.skinDoc.createElement('div')
+    const el = state.uiDoc.createElement('div')
     el.className = 'px-toast'
     el.textContent = message
     main.appendChild(el)
@@ -988,6 +1013,7 @@
   window.addEventListener('unload', () => {
     state.observer?.disconnect()
     try { state.authWindow?.close() } catch {}
+    try { state.appWindow?.close() } catch {}
     removeHostFallback()
     try {
       const host = window.parent.document

@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "plexify",
   "name": "Plexify",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Browse Plex libraries, Continue Watching and home hubs, then play or queue media in Ampwin.",
   "author": "Kenny",
   "entry": "main.js"

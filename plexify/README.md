@@ -1,7 +1,7 @@
 # Plexify
 
 Plexify adds a **Plexify** button near the bottom of Ampwin's active skin. It
-opens a theme-aware Plex browser inside Ampwin with:
+opens a separate, theme-aware Plex browser window with:
 
 - Plex sign-in through the official Plex authorization page.
 - Plex Media Server discovery and server switching.
@@ -25,7 +25,7 @@ request bodies, timeouts, and text responses.
 
 ## Controls
 
-- Click **Plexify** to open or close the browser.
+- Click **Plexify** to open or focus the separate browser window.
 - Use the top-left menu button to collapse the sidebar.
 - Use **Back** to return through Plexify navigation.
 - Click a show, season, artist, or album to open it.

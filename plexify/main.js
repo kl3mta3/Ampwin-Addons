@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.2'
+  const VERSION = '1.0.3'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -252,8 +252,8 @@
       Object.assign(button.style, {
         pointerEvents: 'auto',
         position: 'absolute',
-        right: '104px',
-        bottom: '5px',
+        right: '8px',
+        bottom: '44px',
         zIndex: '2147483000',
         padding: '4px 10px',
         background: 'linear-gradient(#2a2e37, #1a1d23)',

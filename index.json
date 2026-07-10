@@ -39,9 +39,9 @@
 	{
       "id": "plexify",
       "name": "Plexify",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "description": "Browse Plex libraries, Continue Watching and home hubs, then play or queue media in Ampwin.",
-      "author": "Kenny",
+      "author": "kl3mta3",
       "entry": "main.js",
       "files": ["addon.json", "main.js", "README.md"]
     }

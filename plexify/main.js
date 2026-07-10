@@ -361,7 +361,14 @@
       gap: 7px; padding: 6px 8px; background: var(--bg-panel, #1b2028);
       border-bottom: 1px solid var(--edge-lo, #000); }
     #plexify-modal button, #plexify-modal select, #plexify-modal input { font: inherit; -webkit-app-region: no-drag; }
-    #plexify-modal button { cursor: pointer; }
+    #plexify-modal button { cursor: pointer; background: linear-gradient(#2a2e37, #1a1d23);
+      color: #c8ccd4; border: 1px solid #000; border-top-color: #3a3f4b;
+      border-left-color: #3a3f4b; border-radius: 2px; padding: 2px 8px;
+      font-size: 12px; min-width: 26px; }
+    #plexify-modal button:hover { background: linear-gradient(#343945, #22252d); }
+    #plexify-modal button:active { background: #0a0c0e;
+      border-top-color: #000; border-left-color: #000; }
+    #plexify-modal .px-header button { line-height: 18px; }
     #plexify-modal .px-brand { color: #e5a00d; font-weight: 800; letter-spacing: .5px; }
     #plexify-modal .px-title { min-width: 90px; font-weight: 600; overflow: hidden;
       text-overflow: ellipsis; white-space: nowrap; }
@@ -383,7 +390,8 @@
     #plexify-modal .px-nav-button:hover, #plexify-modal .px-library:hover { background: rgba(229,160,13,.14); }
     #plexify-modal .px-section-title { display: flex; align-items: center; padding: 10px 10px 5px;
       color: var(--text-dim, #8992a1); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
-    #plexify-modal .px-section-title button { margin-left: auto; color: inherit; background: none; border: 0; }
+    #plexify-modal .px-section-title button { margin-left: auto; color: inherit; background: none;
+      border: 0; padding: 0; min-width: 0; }
     #plexify-modal .px-main { position: relative; min-width: 0; min-height: 0; flex: 1;
       overflow: auto; padding: 12px 14px 24px; background: var(--bg, #12161c); }
     #plexify-modal .px-login, #plexify-modal .px-message { height: 100%; min-height: 260px;
@@ -394,6 +402,9 @@
     #plexify-modal .px-login-card p { margin: 8px 0 16px; color: var(--text-dim, #9aa2af); line-height: 1.5; }
     #plexify-modal .px-primary { padding: 7px 16px; color: #17130a; background: #e5a00d;
       border: 1px solid #ffd15c; border-radius: 4px; font-weight: 700; }
+    #plexify-modal .px-nav-button, #plexify-modal .px-library,
+    #plexify-modal .px-context button { background: transparent;
+      border: 0; border-radius: 0; min-width: 0; }
     #plexify-modal .px-hub { margin-bottom: 20px; }
     #plexify-modal .px-hub h2 { margin: 0 0 9px; font-size: 15px; }
     #plexify-modal .px-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 7px; }
@@ -686,9 +697,9 @@
     try {
       let data
       if (route.type === 'home') {
-        data = await serverJson('/hubs/home', { includeMetadata: 1, includeLibraryPlaylists: 1 })
+        const hubs = await loadHomeHubs()
         if (nonce !== state.routeNonce) return
-        renderHubs(data?.MediaContainer?.Hub || [])
+        renderHubs(hubs)
       } else if (route.type === 'library') {
         data = await serverJson(`/library/sections/${encodeURIComponent(route.key)}/all`, {
           sort: 'titleSort:asc',
@@ -710,6 +721,41 @@
     } catch (error) {
       if (nonce === state.routeNonce) showMessage(error?.message || String(error))
     }
+  }
+
+  async function loadHomeHubs() {
+    // Try /hubs first (widely supported), then /hubs/home, then fall back to
+    // recently-added items per library section.
+    const endpoints = [
+      { path: '/hubs', query: { includeMetadata: 1 } },
+      { path: '/hubs/home', query: { includeMetadata: 1, includeLibraryPlaylists: 1 } }
+    ]
+    for (const ep of endpoints) {
+      try {
+        const data = await serverJson(ep.path, ep.query)
+        const hubs = data?.MediaContainer?.Hub || []
+        if (hubs.length) return hubs
+      } catch {
+        // endpoint not available on this server, try next
+      }
+    }
+    // Final fallback: build pseudo-hubs from each library's recently added items
+    const hubs = []
+    for (const lib of state.libraries) {
+      try {
+        const data = await serverJson(
+          `/library/sections/${encodeURIComponent(lib.key)}/recentlyAdded`,
+          { 'X-Plex-Container-Start': 0, 'X-Plex-Container-Size': 20 }
+        )
+        const items = data?.MediaContainer?.Metadata || []
+        if (items.length) {
+          hubs.push({ title: `Recently Added in ${lib.title}`, Metadata: items })
+        }
+      } catch {
+        // skip libraries that fail
+      }
+    }
+    return hubs
   }
 
   function itemsFrom(data) {
@@ -878,7 +924,17 @@
   async function addToCurrent(item, play) {
     try {
       const data = await remoteTrackData(item)
-      const track = ampwin.links.addSearchResult(data.result, data.audioOnly)
+      let track
+      if (data.audioOnly) {
+        // Audio tracks: addSearchResult works for direct streams
+        track = ampwin.links.addSearchResult(data.result, true)
+      } else {
+        // Video content: use links.add() which probes direct URLs and handles
+        // both video and audio streams correctly (addSearchResult is designed
+        // for YouTube URLs resolved via yt-dlp which breaks Plex direct streams)
+        track = await ampwin.links.add(data.path, false)
+        if (!track) throw new Error('Ampwin could not add this video stream')
+      }
       if (play) {
         const index = ampwin.playlist.getTracks().findIndex((candidate) => candidate.id === track.id)
         if (index >= 0) ampwin.playlist.playIndex(index)

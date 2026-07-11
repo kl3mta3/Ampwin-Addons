@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.8'
+  const VERSION = '1.0.9'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -1174,19 +1174,27 @@
     }
 
     showMessage('Loading channels…')
-    let channels
-    try { channels = await fetchTVChannels(epgId) } catch (e) {
-      if (nonce === state.routeNonce) showMessage(`Failed to load channels: ${e?.message || e}`)
-      return
+    let channels = []
+    try { 
+      channels = await fetchTVChannels(epgId) 
+    } catch (e) {
+      console.warn('[Plexify] Failed to load channels:', e)
     }
+    
     if (nonce !== state.routeNonce) return
     state.tvChannels = channels
-    if (!channels.length) { showMessage('No channels found for this provider.'); return }
 
-    showMessage(`Loading guide for ${channels.length} channels…`)
-    const channelKeys = channels.map(ch => ch.channelIdentifier || ch.guid || '').filter(Boolean)
-    // Limit to first 50 channels for performance
-    const guideData = await fetchTVGrid(epgId, channelKeys.slice(0, 50), state.tvDate)
+    let guideData = {}
+    if (channels.length > 0) {
+      showMessage(`Loading guide for ${channels.length} channels…`)
+      const channelKeys = channels.map(ch => ch.channelIdentifier || ch.guid || '').filter(Boolean)
+      try {
+        guideData = await fetchTVGrid(epgId, channelKeys.slice(0, 50), state.tvDate)
+      } catch (e) {
+        console.warn('[Plexify] Failed to load guide data:', e)
+      }
+    }
+    
     if (nonce !== state.routeNonce) return
     state.tvGuideData = guideData
 
@@ -1259,6 +1267,13 @@
     scrollArea.className = 'px-guide-channels'
     const now = Date.now()
     const HOUR_PX = 200
+
+    if (channels.length === 0) {
+      const empty = doc.createElement('div')
+      empty.className = 'px-guide-loading'
+      empty.textContent = 'No channels found for this provider.'
+      scrollArea.appendChild(empty)
+    }
 
     for (const ch of channels) {
       const chKey = ch.channelIdentifier || ch.guid || ''

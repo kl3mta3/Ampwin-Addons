@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.3'
+  const VERSION = '1.0.4'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -1072,7 +1072,9 @@
   async function remoteTrackData(item) {
     const full = await resolvePlayableItem(item)
     const part = full.Media[0].Part[0]
-    const directPath = authenticatedUrl(part.key)
+    const directUrl = new URL(authenticatedUrl(part.key))
+    directUrl.searchParams.set('download', '1')
+    const directPath = directUrl.toString()
     const audioOnly = full.type === 'track'
     const title = trackTitle(full)
     const artist = full.grandparentTitle || full.parentTitle || full.originalTitle || full.studio || ''

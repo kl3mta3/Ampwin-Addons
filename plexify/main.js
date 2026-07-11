@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.7'
+  const VERSION = '1.0.8'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -33,7 +33,13 @@
     routeNonce: 0,
     contextMenu: null,
     viewMode: 'grid',
-    videoQuality: localStorage.getItem(`${ADDON_ID}:video-quality`) || '720p'
+    videoQuality: localStorage.getItem(`${ADDON_ID}:video-quality`) || '720p',
+    tvProviders: [],
+    tvProvider: null,
+    tvChannels: [],
+    tvGuideData: {},
+    tvDate: new Date().toISOString().slice(0, 10),
+    tvLiveSession: null
   }
 
   const clientId = getOrCreate(STORAGE.clientId, () => crypto.randomUUID())
@@ -465,6 +471,32 @@
     #plexify-modal .px-list-section { padding: 8px 8px 4px; color: #8992a1; font-size: 10px;
       text-transform: uppercase; letter-spacing: 1px; font-family: 'Segoe UI', sans-serif;
       border-bottom: 1px solid rgba(127,127,127,.12); }
+    #plexify-modal .px-guide { position: relative; }
+    #plexify-modal .px-guide-controls { display: flex; align-items: center; gap: 10px; padding: 0 0 12px; flex-wrap: wrap; }
+    #plexify-modal .px-guide-controls select { background: var(--bg-inset, #0a0c0e); color: var(--text, #c8ccd4);
+      border: 1px solid var(--edge-hi, #3a3f4b); font-size: 12px; padding: 4px 8px; border-radius: 3px; }
+    #plexify-modal .px-guide-controls button { background: rgba(229,160,13,.15); color: #e5a00d;
+      border: 1px solid rgba(229,160,13,.3); border-radius: 3px; padding: 4px 10px; font-size: 12px; min-width: 0; }
+    #plexify-modal .px-guide-controls button:hover { background: rgba(229,160,13,.3); }
+    #plexify-modal .px-guide-controls .px-guide-date { color: var(--text, #c8ccd4); font-weight: 600; font-size: 13px; }
+    #plexify-modal .px-guide-channels { overflow: auto; max-height: calc(100vh - 160px); border: 1px solid rgba(127,127,127,.15); border-radius: 5px; }
+    #plexify-modal .px-guide-ch-row { display: flex; min-height: 48px; border-bottom: 1px solid rgba(127,127,127,.1); }
+    #plexify-modal .px-guide-ch-name { width: 130px; flex: 0 0 130px; display: flex; align-items: center;
+      gap: 6px; padding: 4px 8px; background: rgba(0,0,0,.25); border-right: 1px solid rgba(127,127,127,.15);
+      position: sticky; left: 0; z-index: 1; font-size: 11px; font-weight: 600; cursor: pointer; }
+    #plexify-modal .px-guide-ch-name:hover { background: rgba(229,160,13,.12); }
+    #plexify-modal .px-guide-ch-name img { width: 26px; height: 26px; border-radius: 3px; object-fit: contain;
+      background: #000; flex-shrink: 0; }
+    #plexify-modal .px-guide-programs { display: flex; flex: 1; min-width: 0; overflow: hidden; }
+    #plexify-modal .px-guide-prog { padding: 4px 8px; border-right: 1px solid rgba(127,127,127,.08);
+      cursor: pointer; display: flex; flex-direction: column; justify-content: center; overflow: hidden;
+      transition: background .15s; }
+    #plexify-modal .px-guide-prog:hover { background: rgba(229,160,13,.15); }
+    #plexify-modal .px-guide-prog-title { font-size: 11px; font-weight: 600; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; }
+    #plexify-modal .px-guide-prog-time { font-size: 9px; color: var(--text-dim, #8992a1); white-space: nowrap; }
+    #plexify-modal .px-guide-prog.px-airing { background: rgba(229,160,13,.1); border-left: 2px solid #e5a00d; }
+    #plexify-modal .px-guide-loading { padding: 30px; text-align: center; color: var(--text-dim, #8992a1); }
   `
 
   function mountModal(doc) {
@@ -514,6 +546,7 @@
           <aside class="px-sidebar" id="px-sidebar">
             <div class="px-server"><select id="px-server" title="Plex Media Server"></select></div>
             <button class="px-nav-button" id="px-home">⌂ <span>Home</span></button>
+            <button class="px-nav-button" id="px-livetv">📺 <span>Live TV</span></button>
             <div class="px-section-title">Libraries <button id="px-libraries-toggle">▾</button></div>
             <div id="px-libraries"></div>
           </aside>
@@ -531,6 +564,7 @@
     })
     ui('back').addEventListener('click', goBack)
     ui('home').addEventListener('click', () => navigate({ type: 'home', title: 'Home' }))
+    ui('livetv').addEventListener('click', () => navigate({ type: 'livetv', title: 'Live TV' }))
     ui('libraries-toggle').addEventListener('click', () => {
       state.librariesCollapsed = !state.librariesCollapsed
       ui('libraries').hidden = state.librariesCollapsed
@@ -763,7 +797,9 @@
         data = await serverJson('/hubs/search', { query: route.query, limit: 100 })
         if (nonce !== state.routeNonce) return
         const hubs = data?.MediaContainer?.Hub || []
-        renderHubs(hubs, `No results for “${route.query}”`)
+        renderHubs(hubs, `No results for "${route.query}"`)
+      } else if (route.type === 'livetv') {
+        await renderLiveTV(nonce)
       }
     } catch (error) {
       if (nonce === state.routeNonce) showMessage(error?.message || String(error))
@@ -1040,6 +1076,339 @@
       return `${item.grandparentTitle ? `${item.grandparentTitle} — ` : ''}${s}${e} ${item.title || ''}`.trim()
     }
     return item.title || '(untitled)'
+  }
+
+  // ─── Live TV ────────────────────────────────────────────────────────
+
+  async function discoverTVProviders() {
+    if (!state.server) return []
+    const providers = []
+    // Try /livetv/dvrs first — gives us DVR key + epgIdentifier directly
+    try {
+      const dvrData = await serverJson('/livetv/dvrs')
+      const dvrs = dvrData?.MediaContainer?.Dvr || []
+      for (const dvr of dvrs) {
+        providers.push({
+          id: String(dvr.key),
+          title: dvr.friendlyName || dvr.device || `DVR ${dvr.key}`,
+          epgIdentifier: dvr.epgIdentifier || '',
+          dvrKey: String(dvr.key),
+          type: 'dvr'
+        })
+      }
+    } catch { /* no DVRs configured */ }
+    // Fallback: try /media/providers for any live-tv capable provider
+    if (!providers.length) {
+      try {
+        const mpData = await serverJson('/media/providers')
+        const mps = mpData?.MediaContainer?.MediaProvider || []
+        for (const mp of mps) {
+          const id = mp.identifier || ''
+          if (id.includes('epg') || id.includes('livetv')) {
+            providers.push({
+              id: id,
+              title: mp.title || id,
+              epgIdentifier: id,
+              dvrKey: '',
+              type: 'provider'
+            })
+          }
+        }
+      } catch { /* no providers */ }
+    }
+    return providers
+  }
+
+  async function fetchTVChannels(epgIdentifier) {
+    if (!state.server || !epgIdentifier) return []
+    const data = await serverJson(`/${epgIdentifier}/lineups/dvr/channels`)
+    return data?.MediaContainer?.Metadata || []
+  }
+
+  async function fetchTVGrid(epgIdentifier, channelKeys, date) {
+    if (!state.server || !epgIdentifier || !channelKeys.length) return {}
+    const guideData = {}
+    // Fetch grid data in batches of 8 channels concurrently
+    const batchSize = 8
+    for (let i = 0; i < channelKeys.length; i += batchSize) {
+      const batch = channelKeys.slice(i, i + batchSize)
+      await Promise.all(batch.map(async (chKey) => {
+        try {
+          const data = await serverJson(`/${epgIdentifier}/grid`, {
+            channelGridKey: chKey,
+            date: date
+          })
+          guideData[chKey] = data?.MediaContainer?.Metadata || []
+        } catch { guideData[chKey] = [] }
+      }))
+    }
+    return guideData
+  }
+
+  function fmtGuideTime(epochSec) {
+    return new Date(epochSec * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function fmtGuideDate(dateStr) {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+  }
+
+  async function renderLiveTV(nonce) {
+    showMessage('Discovering Live TV providers…')
+    const providers = await discoverTVProviders()
+    if (nonce !== state.routeNonce) return
+    state.tvProviders = providers
+
+    if (!providers.length) {
+      showMessage('No Live TV providers found on this server. Make sure a DVR/tuner is configured in Plex.')
+      return
+    }
+    if (!state.tvProvider || !providers.find(p => p.id === state.tvProvider?.id)) {
+      state.tvProvider = providers[0]
+    }
+
+    const epgId = state.tvProvider.epgIdentifier
+    if (!epgId) {
+      showMessage('Could not determine EPG provider identifier. Check DVR setup in Plex.')
+      return
+    }
+
+    showMessage('Loading channels…')
+    let channels
+    try { channels = await fetchTVChannels(epgId) } catch (e) {
+      if (nonce === state.routeNonce) showMessage(`Failed to load channels: ${e?.message || e}`)
+      return
+    }
+    if (nonce !== state.routeNonce) return
+    state.tvChannels = channels
+    if (!channels.length) { showMessage('No channels found for this provider.'); return }
+
+    showMessage(`Loading guide for ${channels.length} channels…`)
+    const channelKeys = channels.map(ch => ch.channelIdentifier || ch.guid || '').filter(Boolean)
+    // Limit to first 50 channels for performance
+    const guideData = await fetchTVGrid(epgId, channelKeys.slice(0, 50), state.tvDate)
+    if (nonce !== state.routeNonce) return
+    state.tvGuideData = guideData
+
+    renderGuideGrid(channels.slice(0, 50), guideData)
+  }
+
+  function renderGuideGrid(channels, guideData) {
+    const doc = state.uiDoc
+    const container = doc.createElement('div')
+    container.className = 'px-guide'
+
+    // ── Controls bar ──
+    const controls = doc.createElement('div')
+    controls.className = 'px-guide-controls'
+
+    const provSelect = doc.createElement('select')
+    provSelect.title = 'Live TV Provider'
+    for (const prov of state.tvProviders) {
+      const opt = doc.createElement('option')
+      opt.value = prov.id
+      opt.textContent = prov.title
+      opt.selected = prov.id === state.tvProvider?.id
+      provSelect.appendChild(opt)
+    }
+    provSelect.addEventListener('change', (e) => {
+      state.tvProvider = state.tvProviders.find(p => p.id === e.target.value) || state.tvProviders[0]
+      void navigate({ type: 'livetv', title: 'Live TV' }, false)
+    })
+
+    const prevBtn = doc.createElement('button')
+    prevBtn.textContent = '◀'
+    prevBtn.title = 'Previous day'
+    prevBtn.addEventListener('click', () => {
+      const d = new Date(state.tvDate + 'T12:00:00')
+      d.setDate(d.getDate() - 1)
+      state.tvDate = d.toISOString().slice(0, 10)
+      void navigate({ type: 'livetv', title: 'Live TV' }, false)
+    })
+
+    const dateLabel = doc.createElement('span')
+    dateLabel.className = 'px-guide-date'
+    dateLabel.textContent = fmtGuideDate(state.tvDate)
+
+    const nextBtn = doc.createElement('button')
+    nextBtn.textContent = '▶'
+    nextBtn.title = 'Next day'
+    nextBtn.addEventListener('click', () => {
+      const d = new Date(state.tvDate + 'T12:00:00')
+      d.setDate(d.getDate() + 1)
+      state.tvDate = d.toISOString().slice(0, 10)
+      void navigate({ type: 'livetv', title: 'Live TV' }, false)
+    })
+
+    const todayBtn = doc.createElement('button')
+    todayBtn.textContent = 'Today'
+    todayBtn.addEventListener('click', () => {
+      state.tvDate = new Date().toISOString().slice(0, 10)
+      void navigate({ type: 'livetv', title: 'Live TV' }, false)
+    })
+
+    const refreshBtn = doc.createElement('button')
+    refreshBtn.textContent = '↻ Refresh'
+    refreshBtn.addEventListener('click', () => void navigate({ type: 'livetv', title: 'Live TV' }, false))
+
+    controls.append(provSelect, prevBtn, dateLabel, nextBtn, todayBtn, refreshBtn)
+    container.appendChild(controls)
+
+    // ── Channel rows ──
+    const scrollArea = doc.createElement('div')
+    scrollArea.className = 'px-guide-channels'
+    const now = Date.now()
+    const HOUR_PX = 200
+
+    for (const ch of channels) {
+      const chKey = ch.channelIdentifier || ch.guid || ''
+      const programs = guideData[chKey] || []
+      const row = doc.createElement('div')
+      row.className = 'px-guide-ch-row'
+
+      // Channel name (sticky left)
+      const chName = doc.createElement('div')
+      chName.className = 'px-guide-ch-name'
+      const num = ch.channelNumber || ch.index || ''
+      if (ch.thumb) {
+        const img = doc.createElement('img')
+        img.src = authenticatedUrl(ch.thumb)
+        img.alt = ''
+        img.loading = 'lazy'
+        chName.appendChild(img)
+      }
+      const nameSpan = doc.createElement('span')
+      nameSpan.textContent = num ? `${num} ${ch.title || ''}` : (ch.title || 'Unknown')
+      chName.appendChild(nameSpan)
+      chName.title = ch.title || ''
+      chName.addEventListener('click', () => void tuneLiveChannel(ch))
+
+      // Programs
+      const progArea = doc.createElement('div')
+      progArea.className = 'px-guide-programs'
+
+      if (programs.length) {
+        for (const prog of programs) {
+          const startSec = prog.beginsAt || 0
+          const endSec = prog.endsAt || (startSec + 1800)
+          const startMs = startSec * 1000
+          const endMs = endSec * 1000
+          const durHours = (endMs - startMs) / 3600000
+          const widthPx = Math.max(60, Math.round(durHours * HOUR_PX))
+
+          const el = doc.createElement('div')
+          el.className = 'px-guide-prog'
+          if (now >= startMs && now < endMs) el.classList.add('px-airing')
+          el.style.flex = `0 0 ${widthPx}px`
+
+          const tEl = doc.createElement('div')
+          tEl.className = 'px-guide-prog-title'
+          tEl.textContent = prog.title || prog.grandparentTitle || '(No Title)'
+
+          const tmEl = doc.createElement('div')
+          tmEl.className = 'px-guide-prog-time'
+          tmEl.textContent = startSec ? `${fmtGuideTime(startSec)} – ${fmtGuideTime(endSec)}` : ''
+
+          el.append(tEl, tmEl)
+          el.title = [prog.title, prog.summary].filter(Boolean).join('\n')
+          el.addEventListener('click', () => void tuneLiveChannel(ch))
+          progArea.appendChild(el)
+        }
+      } else {
+        const empty = doc.createElement('div')
+        empty.className = 'px-guide-prog'
+        empty.style.flex = '1'
+        const emT = doc.createElement('div')
+        emT.className = 'px-guide-prog-title'
+        emT.style.color = '#666'
+        emT.textContent = 'No guide data'
+        empty.appendChild(emT)
+        progArea.appendChild(empty)
+      }
+
+      row.append(chName, progArea)
+      scrollArea.appendChild(row)
+    }
+
+    container.appendChild(scrollArea)
+    setMain(container)
+  }
+
+  async function tuneLiveChannel(channel) {
+    if (!state.server) return
+    const chId = channel.channelIdentifier || channel.guid || channel.key
+    if (!chId) { showToast('No channel identifier found'); return }
+
+    const dvrKey = state.tvProvider?.dvrKey || state.tvProvider?.id || ''
+    if (!dvrKey) { showToast('No DVR key available'); return }
+
+    showToast(`Tuning to ${channel.title || chId}…`)
+
+    try {
+      // Step 1: Tune the channel
+      const tuneUrl = `${state.server.uri}/livetv/dvrs/${encodeURIComponent(dvrKey)}/channels/${encodeURIComponent(chId)}/tune`
+      const tuneResp = await ampwin.network.request({
+        url: tuneUrl,
+        method: 'POST',
+        headers: plexHeaders(state.server.token, { Accept: 'application/json' })
+      })
+
+      let sessionPath = ''
+      try {
+        const tuneBody = typeof tuneResp.body === 'string' ? JSON.parse(tuneResp.body) : tuneResp.body
+        const meta = tuneBody?.MediaContainer?.Metadata?.[0]
+        sessionPath = meta?.key || ''
+        if (!sessionPath && meta?.ratingKey) sessionPath = `/livetv/sessions/${meta.ratingKey}`
+      } catch {
+        // If JSON parse fails, try to extract session from XML-like response
+        const match = typeof tuneResp.body === 'string' && tuneResp.body.match(/key="([^"]*livetv\/sessions\/[^"]*)"/)
+        if (match) sessionPath = match[1]
+      }
+
+      if (!sessionPath) {
+        showToast('Tune failed — no session returned. Check Plex DVR logs.')
+        return
+      }
+
+      // Step 2: Build transcoded stream URL
+      const q = QUALITY_MAP[state.videoQuality] || QUALITY_MAP['720p']
+      const streamUrl = new URL('/video/:/transcode/universal/start.mp4', `${state.server.uri}/`)
+      streamUrl.searchParams.set('path', sessionPath)
+      streamUrl.searchParams.set('mediaIndex', '0')
+      streamUrl.searchParams.set('partIndex', '0')
+      streamUrl.searchParams.set('protocol', 'http')
+      streamUrl.searchParams.set('offset', '0')
+      streamUrl.searchParams.set('fastSeek', '1')
+      streamUrl.searchParams.set('directPlay', '0')
+      streamUrl.searchParams.set('directStream', '1')
+      streamUrl.searchParams.set('directStreamAudio', '0')
+      streamUrl.searchParams.set('videoQuality', '100')
+      streamUrl.searchParams.set('maxVideoBitrate', String(q.bitrate))
+      streamUrl.searchParams.set('videoResolution', q.resolution)
+      streamUrl.searchParams.set('audioBoost', '100')
+      streamUrl.searchParams.set('location', 'lan')
+      streamUrl.searchParams.set('subtitles', 'burn')
+      streamUrl.searchParams.set('hasMDE', '1')
+      streamUrl.searchParams.set('autoAdjustQuality', '0')
+      streamUrl.searchParams.set('X-Plex-Session-Identifier', crypto.randomUUID())
+      streamUrl.searchParams.set('X-Plex-Platform', 'Chrome')
+      streamUrl.searchParams.set('X-Plex-Token', state.server.token)
+      streamUrl.searchParams.set('X-Plex-Client-Identifier', clientId)
+      streamUrl.searchParams.set('X-Plex-Product', PRODUCT)
+
+      const url = streamUrl.toString()
+      const title = `📺 ${channel.title || chId}`
+      const thumb = channel.thumb ? authenticatedUrl(channel.thumb) : ''
+
+      // Step 3: Play via addSearchResult
+      const result = { url, title, durationSec: 0, uploader: 'Live TV', thumbnail: thumb }
+      const track = ampwin.links.addSearchResult(result, false)
+      ampwin.links.play(track)
+      showToast(`Now watching: ${channel.title || chId}`)
+    } catch (err) {
+      console.error('[Plexify] Tune failed:', err)
+      showToast(`Failed to tune: ${err?.message || err}`)
+    }
   }
 
   const QUALITY_MAP = {

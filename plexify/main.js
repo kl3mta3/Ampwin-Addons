@@ -10,7 +10,8 @@
     userToken: `${ADDON_ID}:user-token`,
     privateJwk: `${ADDON_ID}:private-jwk`,
     keyId: `${ADDON_ID}:key-id`,
-    serverId: `${ADDON_ID}:server-id`
+    serverId: `${ADDON_ID}:server-id`,
+    videoQuality: `${ADDON_ID}:video-quality`
   }
 
   const state = {
@@ -31,7 +32,8 @@
     history: [],
     routeNonce: 0,
     contextMenu: null,
-    viewMode: 'grid'
+    viewMode: 'grid',
+    videoQuality: localStorage.getItem(`${ADDON_ID}:video-quality`) || '720p'
   }
 
   const clientId = getOrCreate(STORAGE.clientId, () => crypto.randomUUID())
@@ -443,7 +445,7 @@
       padding: 8px 11px; color: #fff; background: rgba(12,15,19,.94); border: 1px solid #5f6977;
       border-radius: 5px; box-shadow: 0 6px 25px rgba(0,0,0,.5); }
     #plexify-modal .px-muted { color: var(--text-dim, #8992a1); }
-    #plexify-modal #px-view-mode { background: var(--bg-inset, #0a0c0e); color: var(--text, #c8ccd4);
+    #plexify-modal #px-view-mode, #plexify-modal #px-quality { background: var(--bg-inset, #0a0c0e); color: var(--text, #c8ccd4);
       border: 1px solid var(--edge-hi, #3a3f4b); font-size: 11px; padding: 2px 4px;
       border-radius: 2px; max-width: 110px; }
     #plexify-modal .px-list { font-family: Consolas, 'Courier New', monospace; font-size: 11px; }
@@ -494,6 +496,13 @@
             <option value="grid" selected>Thumbnails</option>
             <option value="list">List</option>
           </select>
+          <select id="px-quality" title="Video streaming quality">
+            <option value="original">Direct</option>
+            <option value="1080p">1080p</option>
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+            <option value="360p">360p</option>
+          </select>
           <form class="px-search" id="px-search-form">
             <input id="px-search" type="search" placeholder="Search Plex" autocomplete="off" />
             <button type="submit">Search</button>
@@ -531,6 +540,12 @@
     ui('view-mode').addEventListener('change', (event) => {
       state.viewMode = event.target.value
       if (state.route) void renderRoute(state.route)
+    })
+    const qualitySelect = ui('quality')
+    qualitySelect.value = state.videoQuality
+    qualitySelect.addEventListener('change', (event) => {
+      state.videoQuality = event.target.value
+      localStorage.setItem(STORAGE.videoQuality, event.target.value)
     })
     ui('signout').addEventListener('click', signOut)
     ui('search-form').addEventListener('submit', (event) => {
@@ -1025,14 +1040,45 @@
     return item.title || '(untitled)'
   }
 
+  const QUALITY_MAP = {
+    '1080p': { resolution: '1920x1080', bitrate: 20000 },
+    '720p':  { resolution: '1280x720',  bitrate: 4000 },
+    '480p':  { resolution: '720x480',   bitrate: 2000 },
+    '360p':  { resolution: '640x360',   bitrate: 750 }
+  }
+
+  function transcodedUrl(full) {
+    if (!state.server) return ''
+    const q = QUALITY_MAP[state.videoQuality] || QUALITY_MAP['720p']
+    const url = new URL('/video/:/transcode/universal/start.mpd', `${state.server.uri}/`)
+    url.searchParams.set('path', `/library/metadata/${full.ratingKey}`)
+    url.searchParams.set('mediaIndex', '0')
+    url.searchParams.set('partIndex', '0')
+    url.searchParams.set('protocol', 'dash')
+    url.searchParams.set('directPlay', '0')
+    url.searchParams.set('directStream', '1')
+    url.searchParams.set('directStreamAudio', '1')
+    url.searchParams.set('videoQuality', '100')
+    url.searchParams.set('maxVideoBitrate', String(q.bitrate))
+    url.searchParams.set('videoResolution', q.resolution)
+    url.searchParams.set('audioBoost', '100')
+    url.searchParams.set('subtitles', 'burn')
+    url.searchParams.set('X-Plex-Token', state.server.token)
+    url.searchParams.set('X-Plex-Client-Identifier', clientId)
+    url.searchParams.set('X-Plex-Product', PRODUCT)
+    return url.toString()
+  }
+
   async function remoteTrackData(item) {
     const full = await resolvePlayableItem(item)
     const part = full.Media[0].Part[0]
-    const path = authenticatedUrl(part.key)
+    const directPath = authenticatedUrl(part.key)
     const audioOnly = full.type === 'track'
     const title = trackTitle(full)
     const artist = full.grandparentTitle || full.parentTitle || full.originalTitle || full.studio || ''
     const durationSec = Math.round((full.duration || 0) / 1000)
+    // For video content, use server-side transcoding unless user chose 'original'
+    const path = (audioOnly || state.videoQuality === 'original') ? directPath : transcodedUrl(full)
     return {
       full,
       path,

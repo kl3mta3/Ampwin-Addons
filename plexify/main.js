@@ -489,23 +489,34 @@
       border: 1px solid rgba(229,160,13,.3); border-radius: 3px; padding: 4px 10px; font-size: 12px; min-width: 0; }
     #plexify-modal .px-guide-controls button:hover { background: rgba(229,160,13,.3); }
     #plexify-modal .px-guide-controls .px-guide-date { color: var(--text, #c8ccd4); font-weight: 600; font-size: 13px; }
-    #plexify-modal .px-guide-channels { overflow: auto; max-height: calc(100vh - 160px); border: 1px solid rgba(127,127,127,.15); border-radius: 5px; }
+    #plexify-modal .px-guide-channels { position: relative; overflow: auto; max-height: calc(100vh - 160px); border: 1px solid rgba(127,127,127,.15); border-radius: 5px; }
     #plexify-modal .px-guide-ch-row { display: flex; min-height: 48px; border-bottom: 1px solid rgba(127,127,127,.1); }
     #plexify-modal .px-guide-ch-name { width: 130px; flex: 0 0 130px; display: flex; align-items: center;
       gap: 6px; padding: 4px 8px; background: rgba(0,0,0,.25); border-right: 1px solid rgba(127,127,127,.15);
-      position: sticky; left: 0; z-index: 1; font-size: 11px; font-weight: 600; cursor: pointer; }
+      position: sticky; left: 0; z-index: 4; font-size: 11px; font-weight: 600; cursor: pointer; }
     #plexify-modal .px-guide-ch-name:hover { background: rgba(229,160,13,.12); }
     #plexify-modal .px-guide-ch-name img { width: 26px; height: 26px; border-radius: 3px; object-fit: contain;
       background: #000; flex-shrink: 0; }
-    #plexify-modal .px-guide-programs { display: flex; flex: 1; min-width: 0; overflow: hidden; }
-    #plexify-modal .px-guide-prog { padding: 4px 8px; border-right: 1px solid rgba(127,127,127,.08);
+    #plexify-modal .px-guide-programs { position: relative; display: flex; flex: 0 0 auto; min-width: 0; overflow: visible; }
+    #plexify-modal .px-guide-gap { flex: 0 0 auto; min-width: 0; border-right: 1px solid rgba(255,255,255,.035); }
+    #plexify-modal .px-guide-prog { position: relative; padding: 4px 8px; border-right: 1px solid rgba(127,127,127,.08);
       cursor: pointer; display: flex; flex-direction: column; justify-content: center; overflow: hidden;
       transition: background .15s; }
     #plexify-modal .px-guide-prog:hover { background: rgba(229,160,13,.15); }
-    #plexify-modal .px-guide-prog-title { font-size: 11px; font-weight: 600; white-space: nowrap;
+    #plexify-modal .px-guide-prog-title { position: relative; z-index: 2; font-size: 11px; font-weight: 600; white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; }
-    #plexify-modal .px-guide-prog-time { font-size: 9px; color: var(--text-dim, #8992a1); white-space: nowrap; }
-    #plexify-modal .px-guide-prog.px-airing { background: rgba(229,160,13,.1); border-left: 2px solid #e5a00d; }
+    #plexify-modal .px-guide-prog-time { position: relative; z-index: 2; font-size: 9px; color: var(--text-dim, #8992a1); white-space: nowrap; }
+    #plexify-modal .px-guide-prog-progress { position: absolute; left: 0; top: 0; bottom: 0;
+      background: rgba(255,255,255,.08); pointer-events: none; z-index: 1; }
+    #plexify-modal .px-guide-prog-progress-bar { position: absolute; left: 0; bottom: 0; height: 2px;
+      background: rgba(229,160,13,.9); pointer-events: none; z-index: 2; }
+    #plexify-modal .px-guide-prog.px-airing { background: rgba(229,160,13,.08); border-left: 2px solid #e5a00d; }
+    #plexify-modal .px-guide-now-line { position: absolute; top: 0; bottom: 0; width: 2px;
+      background: rgba(232,236,244,.75); box-shadow: 0 0 0 1px rgba(0,0,0,.22);
+      pointer-events: none; z-index: 3; }
+    #plexify-modal .px-guide-now-line::before { content: ''; position: absolute; top: 0; left: 50%;
+      width: 8px; height: 8px; border-radius: 999px; transform: translate(-50%, -40%);
+      background: #eceff5; box-shadow: 0 0 0 2px rgba(13,17,24,.7); }
     #plexify-modal .px-guide-loading { padding: 30px; text-align: center; color: var(--text-dim, #8992a1); }
   `
 
@@ -1532,8 +1543,39 @@
     // ── Channel rows ──
     const scrollArea = doc.createElement('div')
     scrollArea.className = 'px-guide-channels'
-    const now = Date.now()
+    const nowMs = Date.now()
+    const nowSec = nowMs / 1000
+    const isToday = state.tvDate === new Date().toISOString().slice(0, 10)
     const HOUR_PX = 200
+    const CHANNEL_COL_PX = 130
+
+    let minStartSec = Number.POSITIVE_INFINITY
+    let maxEndSec = 0
+
+    for (const ch of channels) {
+      const chKey = guideKeyForChannel(state.tvProvider, ch)
+      const programs = guideData[chKey] || []
+      for (const prog of programs) {
+        const startSec = Number(prog.beginsAt || 0)
+        const endSec = Number(prog.endsAt || (startSec + 1800))
+        if (startSec > 0) minStartSec = Math.min(minStartSec, startSec)
+        if (endSec > 0) maxEndSec = Math.max(maxEndSec, endSec)
+      }
+    }
+
+    if (!Number.isFinite(minStartSec)) {
+      minStartSec = isToday
+        ? Math.floor(nowSec / 1800) * 1800
+        : Math.floor(new Date(state.tvDate + 'T00:00:00').getTime() / 1000)
+    }
+
+    if (isToday) {
+      minStartSec = Math.min(minStartSec, Math.floor(nowSec / 1800) * 1800)
+      maxEndSec = Math.max(maxEndSec, Math.ceil(nowSec / 1800) * 1800)
+    }
+
+    if (maxEndSec <= minStartSec) maxEndSec = minStartSec + 4 * 3600
+    const timelineWidth = Math.max(240, Math.round(((maxEndSec - minStartSec) / 3600) * HOUR_PX))
 
     if (channels.length === 0) {
       const empty = doc.createElement('div')
@@ -1568,11 +1610,27 @@
       // Programs
       const progArea = doc.createElement('div')
       progArea.className = 'px-guide-programs'
+      progArea.style.width = `${timelineWidth}px`
+      progArea.style.flex = `0 0 ${timelineWidth}px`
 
       if (programs.length) {
+        let cursorSec = minStartSec
+
         for (const prog of programs) {
-          const startSec = prog.beginsAt || 0
-          const endSec = prog.endsAt || (startSec + 1800)
+          const startSec = Number(prog.beginsAt || 0)
+          const endSec = Number(prog.endsAt || (startSec + 1800))
+
+          if (startSec > cursorSec) {
+            const gapPx = Math.max(0, Math.round(((startSec - cursorSec) / 3600) * HOUR_PX))
+            if (gapPx > 0) {
+              const gap = doc.createElement('div')
+              gap.className = 'px-guide-gap'
+              gap.style.width = `${gapPx}px`
+              gap.style.flex = `0 0 ${gapPx}px`
+              progArea.appendChild(gap)
+            }
+          }
+
           const startMs = startSec * 1000
           const endMs = endSec * 1000
           const durHours = (endMs - startMs) / 3600000
@@ -1580,14 +1638,27 @@
 
           const el = doc.createElement('div')
           el.className = 'px-guide-prog'
-          if (now >= startMs && now < endMs) el.classList.add('px-airing')
+          const isAiring = nowMs >= startMs && nowMs < endMs
+          if (isAiring) el.classList.add('px-airing')
           el.style.flex = `0 0 ${widthPx}px`
+
+          if (isAiring && endMs > startMs) {
+            const progressPct = Math.max(0, Math.min(100, ((nowMs - startMs) / (endMs - startMs)) * 100))
+
+            const fill = doc.createElement('div')
+            fill.className = 'px-guide-prog-progress'
+            fill.style.width = `${progressPct}%`
+            el.appendChild(fill)
+
+            const bar = doc.createElement('div')
+            bar.className = 'px-guide-prog-progress-bar'
+            bar.style.width = `${progressPct}%`
+            el.appendChild(bar)
+          }
 
           const tEl = doc.createElement('div')
           tEl.className = 'px-guide-prog-title'
 
-          // Plex guide entries use title for the episode title and
-          // grandparentTitle for the series/show title.
           const showTitle =
             prog.grandparentTitle ||
             prog.parentTitle ||
@@ -1603,7 +1674,6 @@
 
           el.append(tEl, tmEl)
 
-          // Keep the episode title available in the hover tooltip.
           const episodeTitle =
             prog.title && prog.title !== showTitle
               ? prog.title
@@ -1614,11 +1684,24 @@
             .join('\n')
           el.addEventListener('click', () => void tuneLiveChannel(ch, prog))
           progArea.appendChild(el)
+
+          cursorSec = Math.max(cursorSec, endSec)
+        }
+
+        if (cursorSec < maxEndSec) {
+          const tailGapPx = Math.max(0, Math.round(((maxEndSec - cursorSec) / 3600) * HOUR_PX))
+          if (tailGapPx > 0) {
+            const gap = doc.createElement('div')
+            gap.className = 'px-guide-gap'
+            gap.style.width = `${tailGapPx}px`
+            gap.style.flex = `0 0 ${tailGapPx}px`
+            progArea.appendChild(gap)
+          }
         }
       } else {
         const empty = doc.createElement('div')
         empty.className = 'px-guide-prog'
-        empty.style.flex = '1'
+        empty.style.flex = `0 0 ${timelineWidth}px`
         const emT = doc.createElement('div')
         emT.className = 'px-guide-prog-title'
         emT.style.color = '#666'
@@ -1631,217 +1714,36 @@
       scrollArea.appendChild(row)
     }
 
+    if (isToday && nowSec >= minStartSec && nowSec <= maxEndSec) {
+      const nowLine = doc.createElement('div')
+      nowLine.className = 'px-guide-now-line'
+      scrollArea.appendChild(nowLine)
+
+      const nowOffsetPx = ((nowSec - minStartSec) / 3600) * HOUR_PX
+
+      const updateNowLine = () => {
+        const leftPx = CHANNEL_COL_PX + nowOffsetPx - scrollArea.scrollLeft
+        const visibleMin = CHANNEL_COL_PX
+        const visibleMax = scrollArea.clientWidth
+
+        if (leftPx < visibleMin - 2 || leftPx > visibleMax + 2) {
+          nowLine.style.display = 'none'
+          return
+        }
+
+        nowLine.style.display = ''
+        nowLine.style.left = `${leftPx}px`
+      }
+
+      scrollArea.addEventListener('scroll', updateNowLine, { passive: true })
+
+      const desiredScroll = Math.max(0, nowOffsetPx - 140)
+      scrollArea.scrollLeft = desiredScroll
+      updateNowLine()
+    }
+
     container.appendChild(scrollArea)
     setMain(container)
-  }
-
-  function addAndPlayLiveResult(result) {
-    const track = ampwin.links.addSearchResult(result, false)
-
-    // Match the playback path already used by normal Plexify video items.
-    const tracks = ampwin.playlist?.getTracks?.() || []
-    const index = tracks.findIndex((candidate) => candidate.id === track?.id)
-
-    if (index >= 0 && ampwin.playlist?.playIndex) {
-      ampwin.playlist.playIndex(index)
-    } else if (ampwin.links?.play) {
-      // Compatibility fallback for older Ampwin builds.
-      ampwin.links.play(track)
-    }
-
-    return track
-  }
-
-  function asArray(value) {
-    if (value === undefined || value === null) return []
-    return Array.isArray(value) ? value : [value]
-  }
-
-  function normalizeTuneIdentifier(value) {
-    if (value === undefined || value === null) return []
-    const raw = String(value).trim()
-    if (!raw) return []
-
-    const values = []
-
-    const add = (candidate) => {
-      if (candidate === undefined || candidate === null) return
-      let normalized = String(candidate).trim()
-      if (!normalized) return
-      try { normalized = decodeURIComponent(normalized) } catch {}
-      normalized = normalized.replace(/^channel:\/\//i, '')
-      normalized = normalized.replace(/^\/+|\/+$/g, '')
-      if (normalized && !values.includes(normalized)) values.push(normalized)
-    }
-
-    // A Plex key can be a full provider path. The tune endpoint needs only
-    // the channel identifier portion.
-    const channelMatch = raw.match(/\/channels\/([^/?#]+)/i)
-    if (channelMatch) add(channelMatch[1])
-
-    add(raw)
-
-    if (raw.includes('/')) {
-      const parts = raw.split('/').filter(Boolean)
-      add(parts[parts.length - 1])
-    }
-
-    return values
-  }
-
-  function collectLiveTVTuneIdentifiers(channel, program) {
-    const candidates = []
-    const add = (value) => {
-      for (const id of normalizeTuneIdentifier(value)) {
-        if (!candidates.includes(id)) candidates.push(id)
-      }
-    }
-
-    // Program metadata is first because Plex's grid response can expose the
-    // exact composite identifier used by /channels/<id>/tune.
-    for (const value of [
-      program?.channelIdentifier,
-      program?.channelId,
-      program?.channelID,
-      program?.channelKey,
-      program?.channelGuid,
-      program?.gridKey,
-      channel?.tuneIdentifier,
-      channel?.channelIdentifier,
-      channel?.identifier,
-      channel?.id,
-      channel?.guid,
-      channel?.key,
-      channel?.gridKey,
-      channel?.channelNumber,
-      channel?.guideNumber,
-      channel?.vcn,
-      channel?.number,
-      channel?.index
-    ]) {
-      add(value)
-    }
-
-    // Composite Plex/XMLTV identifiers are usually safer than display-only
-    // channel numbers, so try them first while retaining numeric fallbacks.
-    return candidates.sort((a, b) => {
-      const aComposite = /[A-Za-z.:_-]/.test(a) ? 1 : 0
-      const bComposite = /[A-Za-z.:_-]/.test(b) ? 1 : 0
-      return bComposite - aComposite
-    })
-  }
-
-  function collectLiveTVSessionPaths(value) {
-    const paths = []
-    const seen = new Set()
-
-    const addPath = (candidate) => {
-      if (candidate === undefined || candidate === null) return
-      const raw = String(candidate).trim()
-      if (!raw) return
-
-      const direct = raw.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
-      if (direct) {
-        const path = `/livetv/sessions/${direct[1]}`
-        if (!paths.includes(path)) paths.push(path)
-        return
-      }
-
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
-        const path = `/livetv/sessions/${raw}`
-        if (!paths.includes(path)) paths.push(path)
-      }
-    }
-
-    const walk = (node, parentKey = '') => {
-      if (node === undefined || node === null) return
-
-      if (typeof node === 'string' || typeof node === 'number') {
-        if (
-          /^(key|ratingKey|session|sessionKey|uuid)$/i.test(parentKey) ||
-          String(node).includes('/livetv/sessions/')
-        ) {
-          addPath(node)
-        }
-        return
-      }
-
-      if (typeof node !== 'object' || seen.has(node)) return
-      seen.add(node)
-
-      if (Array.isArray(node)) {
-        for (const item of node) walk(item, parentKey)
-        return
-      }
-
-      for (const [key, child] of Object.entries(node)) {
-        walk(child, key)
-      }
-    }
-
-    walk(value)
-    return paths
-  }
-
-  function firstObject(value) {
-    if (!value) return null
-    if (Array.isArray(value)) {
-      return value.find((item) => item && typeof item === 'object') || null
-    }
-    return typeof value === 'object' ? value : null
-  }
-
-  function extractLocalDvrTuneMetadata(tuneBody) {
-    const container = tuneBody?.MediaContainer || tuneBody || {}
-    const subscription = firstObject(container.MediaSubscription)
-    const operation = firstObject(subscription?.MediaGrabOperation)
-
-    const nestedMetadata = firstObject(operation?.Metadata)
-    if (nestedMetadata) return nestedMetadata
-
-    return firstObject(container.Metadata)
-  }
-
-  function extractLiveTVSessionPathFromText(rawBody) {
-    if (!rawBody) return ''
-
-    try {
-      const parsed = JSON.parse(rawBody)
-      const metadata = extractLocalDvrTuneMetadata(parsed)
-      const metadataKey = String(metadata?.key || '')
-      if (metadataKey.includes('/livetv/sessions/')) return metadataKey
-
-      const jsonPath = collectLiveTVSessionPaths(parsed)[0]
-      if (jsonPath) return jsonPath
-    } catch {}
-
-    // Prefer a Metadata key over any unrelated UUID elsewhere in the response.
-    const metadataKey =
-      rawBody.match(/<Metadata\b[^>]*\bkey=["']([^"']*\/livetv\/sessions\/[^"']+)["']/i) ||
-      rawBody.match(/["']key["']\s*:\s*["']([^"']*\/livetv\/sessions\/[^"']+)["']/i)
-
-    if (metadataKey?.[1]) return metadataKey[1]
-
-    const direct = rawBody.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
-    if (direct) return `/livetv/sessions/${direct[1]}`
-
-    return ''
-  }
-
-  function extractLocalDvrRatingKey(rawBody) {
-    if (!rawBody) return ''
-
-    try {
-      const parsed = JSON.parse(rawBody)
-      const metadata = extractLocalDvrTuneMetadata(parsed)
-      return String(metadata?.ratingKey || metadata?.key || '')
-    } catch {}
-
-    const match =
-      rawBody.match(/<Metadata\b[^>]*\bratingKey=["']([^"']+)["']/i) ||
-      rawBody.match(/["']ratingKey["']\s*:\s*["']?([^"',}\s]+)["']?/i)
-
-    return match?.[1] || ''
   }
 
   async function currentLiveTVSessionPaths() {

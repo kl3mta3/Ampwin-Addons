@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.4'
+  const VERSION = '1.0.5'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -497,7 +497,7 @@
             <option value="list">List</option>
           </select>
           <select id="px-quality" title="Video streaming quality">
-            <option value="original">Direct</option>
+            <option value="original" selected>Direct</option>
             <option value="1080p">1080p</option>
             <option value="720p">720p</option>
             <option value="480p">480p</option>
@@ -1055,14 +1055,21 @@
     url.searchParams.set('mediaIndex', '0')
     url.searchParams.set('partIndex', '0')
     url.searchParams.set('protocol', 'http')
+    url.searchParams.set('offset', '0')
+    url.searchParams.set('fastSeek', '1')
     url.searchParams.set('directPlay', '0')
     url.searchParams.set('directStream', '1')
-    url.searchParams.set('directStreamAudio', '1')
+    url.searchParams.set('directStreamAudio', '0')
     url.searchParams.set('videoQuality', '100')
     url.searchParams.set('maxVideoBitrate', String(q.bitrate))
     url.searchParams.set('videoResolution', q.resolution)
     url.searchParams.set('audioBoost', '100')
+    url.searchParams.set('location', 'lan')
     url.searchParams.set('subtitles', 'burn')
+    url.searchParams.set('hasMDE', '1')
+    url.searchParams.set('autoAdjustQuality', '0')
+    url.searchParams.set('X-Plex-Session-Identifier', crypto.randomUUID())
+    url.searchParams.set('X-Plex-Platform', 'Chrome')
     url.searchParams.set('X-Plex-Token', state.server.token)
     url.searchParams.set('X-Plex-Client-Identifier', clientId)
     url.searchParams.set('X-Plex-Product', PRODUCT)

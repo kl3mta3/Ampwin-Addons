@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.6'
+  const VERSION = '1.0.7'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -944,7 +944,9 @@
 
     const poster = state.uiDoc.createElement('div')
     poster.className = 'px-poster'
-    const art = item.thumb || item.parentThumb || item.grandparentThumb
+    const art = item.type === 'episode'
+      ? (item.grandparentThumb || item.parentThumb || item.thumb)
+      : (item.thumb || item.parentThumb || item.grandparentThumb)
     if (art) {
       const image = state.uiDoc.createElement('img')
       image.loading = 'lazy'

@@ -1601,28 +1601,27 @@
   }
 
   function boot() {
-    // The launch button is always installed. Missing host capabilities are
-    // reported inside Plexify instead of making the addon appear to do nothing.
     installIntoSkin()
     if (!ampwin.network?.request) console.warn('Plexify: ampwin.network.request is unavailable')
-    setTimeout(() => {
+    
+    // Robustly ensure the button stays injected even after skin reloads
+    state.watchdog = setInterval(() => {
       const doc = currentSkinDocument()
-      if (!doc?.getElementById('plexify-launch')) installHostFallback()
-    }, 300)
-    try {
-      const layer = window.parent.document.getElementById('skin-layer')
-      if (layer) {
-        state.observer = new MutationObserver(() => setTimeout(installIntoSkin, 0))
-        state.observer.observe(layer, { childList: true, subtree: true })
+      if (doc?.body) {
+        if (!doc.getElementById('plexify-launch')) {
+          installLaunchButton(doc)
+          if (doc.getElementById('plexify-launch')) removeHostFallback()
+        }
+      } else {
+        if (!window.parent.document.getElementById('plexify-host-launch')) {
+          installHostFallback()
+        }
       }
-    } catch (error) {
-      console.error('Plexify could not observe skin changes', error)
-      installHostFallback()
-    }
+    }, 1000)
   }
 
   window.addEventListener('unload', () => {
-    state.observer?.disconnect()
+    if (state.watchdog) clearInterval(state.watchdog)
     try { state.authWindow?.close() } catch {}
     try { state.appWindow?.close() } catch {}
     removeHostFallback()

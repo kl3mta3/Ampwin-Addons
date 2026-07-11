@@ -1050,17 +1050,7 @@
   async function addToCurrent(item, play) {
     try {
       const data = await remoteTrackData(item)
-      let track
-      if (data.audioOnly) {
-        // Audio tracks: addSearchResult works for direct streams
-        track = ampwin.links.addSearchResult(data.result, true)
-      } else {
-        // Video content: use links.add() which probes direct URLs and handles
-        // both video and audio streams correctly (addSearchResult is designed
-        // for YouTube URLs resolved via yt-dlp which breaks Plex direct streams)
-        track = await ampwin.links.add(data.path, false)
-        if (!track) throw new Error('Ampwin could not add this video stream')
-      }
+      const track = ampwin.links.addSearchResult(data.result, data.audioOnly)
       if (play) {
         const index = ampwin.playlist.getTracks().findIndex((candidate) => candidate.id === track.id)
         if (index >= 0) ampwin.playlist.playIndex(index)

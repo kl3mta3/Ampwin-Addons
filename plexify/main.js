@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.0.9'
+  const VERSION = '1.2.0'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -39,7 +39,9 @@
     tvChannels: [],
     tvGuideData: {},
     tvDate: new Date().toISOString().slice(0, 10),
-    tvLiveSession: null
+    tvLiveSession: null,
+    playerErrorUnsub: null,
+    playerTrackUnsub: null
   }
 
   const clientId = getOrCreate(STORAGE.clientId, () => crypto.randomUUID())
@@ -218,6 +220,7 @@
   }
 
   function signOut() {
+    stopLiveTVKeepalive(true)
     localStorage.removeItem(STORAGE.userToken)
     localStorage.removeItem(STORAGE.serverId)
     state.servers = []
@@ -438,6 +441,13 @@
       height: 3px; background: rgba(0,0,0,.7); border-radius: 2px; overflow: hidden; }
     #plexify-modal .px-progress span { display: block; height: 100%; background: #e5a00d; }
     #plexify-modal .px-empty { padding: 45px 15px; text-align: center; color: var(--text-dim, #8992a1); }
+    #plexify-modal .px-bulk-actions { display: flex; align-items: center; gap: 8px;
+      margin: 0 0 12px; padding: 0 0 10px; border-bottom: 1px solid rgba(127,127,127,.16); }
+    #plexify-modal .px-bulk-actions button { min-width: 0; padding: 5px 11px;
+      color: #e5a00d; background: rgba(229,160,13,.13);
+      border: 1px solid rgba(229,160,13,.35); border-radius: 3px; font-weight: 700; }
+    #plexify-modal .px-bulk-actions button:hover { background: rgba(229,160,13,.25); }
+    #plexify-modal .px-bulk-actions button:disabled { cursor: wait; opacity: .65; }
     #plexify-modal .px-context { position: fixed; z-index: 2147483640; min-width: 190px; max-width: 280px;
       padding: 5px; background: #171b22; border: 1px solid #566171; border-radius: 5px;
       box-shadow: 0 10px 30px rgba(0,0,0,.65); }
@@ -528,7 +538,7 @@
             <option value="grid" selected>Thumbnails</option>
             <option value="list">List</option>
           </select>
-          <select id="px-quality" title="Video streaming quality">
+          <select id="px-quality" title="Live TV quality. Library files use the original Plex source so seeking works.">
             <option value="original" selected>Direct</option>
             <option value="1080p">1080p</option>
             <option value="720p">720p</option>
@@ -723,6 +733,31 @@
     return requestJson({ url: url.toString(), headers: plexHeaders(state.server.token) })
   }
 
+  async function plexCloudJson(path, query = {}) {
+    const token = localStorage.getItem(STORAGE.userToken)
+    if (!token) throw new Error('No Plex account token is available')
+
+    const url = new URL(path, 'https://epg.provider.plex.tv/')
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
+    }
+
+    return requestJson({
+      url: url.toString(),
+      headers: plexHeaders(token, {
+        'X-Plex-Product': 'Plex Web',
+        'X-Plex-Version': '4.145.1',
+        'X-Plex-Platform': 'Chrome',
+        'X-Plex-Device': 'Windows',
+        'X-Plex-Model': 'hosted',
+        'X-Plex-Provider-Version': '7.2',
+        'X-Plex-Features': 'external-media,indirect-media',
+        'X-Plex-Language': 'en',
+        'X-Plex-Text-Format': 'plain'
+      })
+    })
+  }
+
   async function loadLibraries() {
     const data = await serverJson('/library/sections')
     return data?.MediaContainer?.Directory || []
@@ -792,7 +827,22 @@
       } else if (route.type === 'children') {
         data = await serverJson(`/library/metadata/${encodeURIComponent(route.ratingKey)}/children`)
         if (nonce !== state.routeNonce) return
-        renderGrid(itemsFrom(data), route.title)
+
+        const items = itemsFrom(data)
+        const inferredParentType = items.some((item) => item.type === 'season')
+          ? 'show'
+          : items.some((item) => item.type === 'episode')
+            ? 'season'
+            : ''
+
+        route.parentType = route.parentType || inferredParentType
+
+        renderGrid(items, route.title, {
+          parentType: route.parentType,
+          ratingKey: route.ratingKey,
+          title: route.title,
+          visibleItems: items
+        })
       } else if (route.type === 'search') {
         data = await serverJson('/hubs/search', { query: route.query, limit: 100 })
         if (nonce !== state.routeNonce) return
@@ -892,32 +942,166 @@
     setMain(root)
   }
 
-  function renderGrid(items, title) {
+  function renderGrid(items, title, bulkContext = null) {
     if (state.viewMode === 'list') {
-      renderGridList(items, title)
+      renderGridList(items, title, bulkContext)
       return
     }
-    const root = state.uiDoc.createElement('div')
+
+    const page = state.uiDoc.createElement('div')
+    const actions = createBulkPlaylistActions(bulkContext)
+    if (actions) page.appendChild(actions)
+
     if (!items.length) {
-      root.innerHTML = `<div class="px-empty">Nothing was found in ${escapeHtml(title)}</div>`
+      const empty = state.uiDoc.createElement('div')
+      empty.className = 'px-empty'
+      empty.textContent = `Nothing was found in ${title}`
+      page.appendChild(empty)
     } else {
-      root.className = 'px-grid'
-      for (const item of items) root.appendChild(createCard(item))
+      const grid = state.uiDoc.createElement('div')
+      grid.className = 'px-grid'
+      for (const item of items) grid.appendChild(createCard(item))
+      page.appendChild(grid)
     }
-    setMain(root)
+
+    setMain(page)
   }
 
-  function renderGridList(items, title) {
-    const root = state.uiDoc.createElement('div')
-    root.className = 'px-list'
+  function renderGridList(items, title, bulkContext = null) {
+    const page = state.uiDoc.createElement('div')
+    const actions = createBulkPlaylistActions(bulkContext)
+    if (actions) page.appendChild(actions)
+
+    const list = state.uiDoc.createElement('div')
+    list.className = 'px-list'
+
     if (!items.length) {
-      root.innerHTML = `<div class="px-empty">Nothing was found in ${escapeHtml(title)}</div>`
+      const empty = state.uiDoc.createElement('div')
+      empty.className = 'px-empty'
+      empty.textContent = `Nothing was found in ${title}`
+      list.appendChild(empty)
     } else {
       for (let i = 0; i < items.length; i++) {
-        root.appendChild(createListRow(items[i], i + 1))
+        list.appendChild(createListRow(items[i], i + 1))
       }
     }
-    setMain(root)
+
+    page.appendChild(list)
+    setMain(page)
+  }
+
+  function createBulkPlaylistActions(context) {
+    if (!context || !['show', 'season'].includes(context.parentType)) return null
+
+    const bar = state.uiDoc.createElement('div')
+    bar.className = 'px-bulk-actions'
+
+    const button = state.uiDoc.createElement('button')
+    const label = context.parentType === 'show' ? 'Add Series' : 'Add Season'
+    button.textContent = `＋ ${label} to Playlist`
+    button.title = `Add every episode in this ${context.parentType === 'show' ? 'series' : 'season'} to the current Ampwin playlist`
+
+    button.addEventListener('click', () => {
+      void addContainerEpisodesToPlaylist(context, button, label)
+    })
+
+    bar.appendChild(button)
+    return bar
+  }
+
+  async function loadAllPlexItems(path) {
+    const pageSize = 500
+    const allItems = []
+    let start = 0
+
+    while (true) {
+      const data = await serverJson(path, {
+        includeMetadata: 1,
+        'X-Plex-Container-Start': start,
+        'X-Plex-Container-Size': pageSize
+      })
+
+      const container = data?.MediaContainer || {}
+      const pageItems = container.Metadata || container.Directory || []
+      allItems.push(...pageItems)
+
+      const totalSize = Number(container.totalSize || container.size || 0)
+      if (!pageItems.length) break
+      if (totalSize > 0 && allItems.length >= totalSize) break
+      if (pageItems.length < pageSize) break
+
+      start += pageItems.length
+    }
+
+    return allItems
+  }
+
+  function sortEpisodesForPlaylist(items) {
+    return [...items].sort((a, b) => {
+      const seasonA = Number(a.parentIndex ?? 0)
+      const seasonB = Number(b.parentIndex ?? 0)
+      if (seasonA !== seasonB) return seasonA - seasonB
+
+      const episodeA = Number(a.index ?? 0)
+      const episodeB = Number(b.index ?? 0)
+      if (episodeA !== episodeB) return episodeA - episodeB
+
+      return String(a.title || '').localeCompare(String(b.title || ''))
+    })
+  }
+
+  async function addContainerEpisodesToPlaylist(context, button, label) {
+    if (button.disabled) return
+
+    const originalText = button.textContent
+    button.disabled = true
+
+    try {
+      let episodes
+
+      if (context.parentType === 'season') {
+        episodes = context.visibleItems || []
+      } else {
+        episodes = await loadAllPlexItems(
+          `/library/metadata/${encodeURIComponent(context.ratingKey)}/allLeaves`
+        )
+      }
+
+      episodes = sortEpisodesForPlaylist(
+        episodes.filter((item) => item.type === 'episode' || isPlayable(item))
+      )
+
+      if (!episodes.length) {
+        toast(`No playable episodes were found in ${context.title}`)
+        return
+      }
+
+      let added = 0
+      let failed = 0
+
+      for (let i = 0; i < episodes.length; i++) {
+        button.textContent = `Adding ${i + 1} of ${episodes.length}…`
+
+        try {
+          const data = await remoteTrackData(episodes[i])
+          ampwin.links.addSearchResult(data.result, data.audioOnly)
+          added++
+        } catch (error) {
+          failed++
+          console.warn('[Plexify] Could not add episode to playlist:', episodes[i], error)
+        }
+      }
+
+      const episodeWord = added === 1 ? 'episode' : 'episodes'
+      const failureText = failed ? `, ${failed} failed` : ''
+      toast(`${label} complete: added ${added} ${episodeWord}${failureText}`)
+    } catch (error) {
+      console.error(`[Plexify] ${label} failed:`, error)
+      toast(`Could not add ${context.title}: ${error?.message || error}`)
+    } finally {
+      button.disabled = false
+      button.textContent = originalText
+    }
   }
 
   function createListRow(item, index) {
@@ -951,7 +1135,8 @@
       row.addEventListener('click', () => void navigate({
         type: 'children',
         title: item.title || item.grandparentTitle || 'Plex',
-        ratingKey: item.ratingKey
+        ratingKey: item.ratingKey,
+        parentType: item.type
       }))
     }
     if (isPlayable(item)) {
@@ -1011,7 +1196,8 @@
       card.addEventListener('click', () => void navigate({
         type: 'children',
         title: item.title || item.grandparentTitle || 'Plex',
-        ratingKey: item.ratingKey
+        ratingKey: item.ratingKey,
+        parentType: item.type
       }))
     }
     if (isPlayable(item)) {
@@ -1083,63 +1269,143 @@
   async function discoverTVProviders() {
     if (!state.server) return []
     const providers = []
-    // Try /livetv/dvrs first — gives us DVR key + epgIdentifier directly
+
+    // Local DVR source. Plex Web labels this with the server name, not the
+    // DVR database key, which is why "DVR 68" was appearing here before.
     try {
       const dvrData = await serverJson('/livetv/dvrs')
       const dvrs = dvrData?.MediaContainer?.Dvr || []
       for (const dvr of dvrs) {
+        const detail = dvr.lineupTitle || dvr.friendlyName || dvr.title || ''
+        const title = dvrs.length > 1 && detail
+          ? `${state.server.name} · ${detail}`
+          : state.server.name
+
         providers.push({
-          id: String(dvr.key),
-          title: dvr.friendlyName || dvr.device || `DVR ${dvr.key}`,
+          id: `dvr:${dvr.key}`,
+          title,
           epgIdentifier: dvr.epgIdentifier || '',
           dvrKey: String(dvr.key),
           type: 'dvr'
         })
       }
-    } catch { /* no DVRs configured */ }
-    // Fallback: try /media/providers for any live-tv capable provider
-    if (!providers.length) {
-      try {
-        const mpData = await serverJson('/media/providers')
-        const mps = mpData?.MediaContainer?.MediaProvider || []
-        for (const mp of mps) {
-          const id = mp.identifier || ''
-          if (id.includes('epg') || id.includes('livetv')) {
-            providers.push({
-              id: id,
-              title: mp.title || id,
-              epgIdentifier: id,
-              dvrKey: '',
-              type: 'provider'
-            })
-          }
-        }
-      } catch { /* no providers */ }
+    } catch (error) {
+      console.warn('[Plexify] Failed to discover local DVRs:', error)
     }
+
+    // Plex's free streaming channels are a cloud provider, not another DVR
+    // attached to the selected Plex Media Server.
+    try {
+      const cloud = await plexCloudJson('/')
+      if (cloud?.MediaProvider?.identifier === 'tv.plex.provider.epg') {
+        providers.push({
+          id: 'plex-cloud',
+          title: 'Plex Channels',
+          epgIdentifier: 'tv.plex.provider.epg',
+          dvrKey: '',
+          type: 'plex-cloud'
+        })
+      }
+    } catch (error) {
+      console.warn('[Plexify] Failed to discover Plex Channels:', error)
+    }
+
     return providers
   }
 
-  async function fetchTVChannels(epgIdentifier) {
-    if (!state.server || !epgIdentifier) return []
-    const data = await serverJson(`/${epgIdentifier}/lineups/dvr/channels`)
-    return data?.MediaContainer?.Metadata || []
+  function cloudStreamKey(channel) {
+    for (const media of channel?.Media || []) {
+      for (const part of media?.Part || []) {
+        if (part?.key) return part.key
+      }
+    }
+    return ''
   }
 
-  async function fetchTVGrid(epgIdentifier, channelKeys, date) {
-    if (!state.server || !epgIdentifier || !channelKeys.length) return {}
+  function cloudChannelHasDrm(channel) {
+    return (channel?.Media || []).some((media) => Boolean(media?.drm))
+  }
+
+  function guideKeyForChannel(provider, channel) {
+    if (provider?.type === 'plex-cloud') return channel.gridKey || ''
+    return channel.gridKey || channel.channelIdentifier || channel.key || channel.guid || channel.id || ''
+  }
+
+  function liveTVThumbUrl(channel) {
+    if (!channel?.thumb) return ''
+    if (state.tvProvider?.type === 'plex-cloud') return channel.thumb
+    return authenticatedUrl(channel.thumb)
+  }
+
+  async function fetchTVChannels(provider) {
+    if (!provider) return []
+
+    if (provider.type === 'plex-cloud') {
+      const data = await plexCloudJson('/lineups/plex/channels')
+      const channels = data?.MediaContainer?.Channel || []
+      return channels.map((channel) => ({
+        ...channel,
+        channelIdentifier: channel.id || channel.slug || channel.gridKey || '',
+        channelNumber: channel.vcn || channel.channelNumber || '',
+        _streamKey: cloudStreamKey(channel),
+        _drm: cloudChannelHasDrm(channel)
+      }))
+    }
+
+    if (!state.server || !provider.epgIdentifier) return []
+
+    const data = await serverJson(`/${provider.epgIdentifier}/lineups/dvr/channels`)
+    const container = data?.MediaContainer || {}
+
+    // Local DVR lineups are returned as MediaContainer.Channel. Older or
+    // unusual Plex builds may use Metadata or Directory, so keep fallbacks.
+    const channels = container.Channel || container.Metadata || container.Directory || []
+
+    return channels.map((channel) => ({
+      ...channel,
+      channelIdentifier:
+        channel.channelIdentifier ||
+        channel.identifier ||
+        channel.key ||
+        channel.id ||
+        '',
+      channelNumber:
+        channel.channelNumber ||
+        channel.guideNumber ||
+        channel.vcn ||
+        channel.number ||
+        channel.index ||
+        '',
+      title:
+        channel.title ||
+        channel.guideName ||
+        channel.callSign ||
+        channel.name ||
+        channel.channelIdentifier ||
+        channel.key ||
+        'Unknown channel',
+      thumb: channel.thumb || channel.logo || ''
+    }))
+  }
+
+  async function fetchTVGrid(provider, channelKeys, date) {
+    if (!provider || !channelKeys.length) return {}
     const guideData = {}
-    // Fetch grid data in batches of 8 channels concurrently
+
+    // Fetch grid data in batches of 8 channels concurrently.
     const batchSize = 8
     for (let i = 0; i < channelKeys.length; i += batchSize) {
       const batch = channelKeys.slice(i, i + batchSize)
       await Promise.all(batch.map(async (chKey) => {
         try {
-          const data = await serverJson(`/${epgIdentifier}/grid`, {
-            channelGridKey: chKey,
-            date: date
-          })
+          const data = provider.type === 'plex-cloud'
+            ? await plexCloudJson('/grid', { channelGridKey: chKey, date })
+            : await serverJson(`/${provider.epgIdentifier}/grid`, { channelGridKey: chKey, date })
           guideData[chKey] = data?.MediaContainer?.Metadata || []
-        } catch { guideData[chKey] = [] }
+        } catch (error) {
+          console.warn(`[Plexify] Failed to load guide channel ${chKey}:`, error)
+          guideData[chKey] = []
+        }
       }))
     }
     return guideData
@@ -1167,16 +1433,15 @@
       state.tvProvider = providers[0]
     }
 
-    const epgId = state.tvProvider.epgIdentifier
-    if (!epgId) {
-      showMessage('Could not determine EPG provider identifier. Check DVR setup in Plex.')
+    if (state.tvProvider.type === 'dvr' && !state.tvProvider.epgIdentifier) {
+      showMessage('Could not determine the DVR EPG provider identifier. Check DVR setup in Plex.')
       return
     }
 
     showMessage('Loading channels…')
     let channels = []
-    try { 
-      channels = await fetchTVChannels(epgId) 
+    try {
+      channels = await fetchTVChannels(state.tvProvider)
     } catch (e) {
       console.warn('[Plexify] Failed to load channels:', e)
     }
@@ -1187,9 +1452,11 @@
     let guideData = {}
     if (channels.length > 0) {
       showMessage(`Loading guide for ${channels.length} channels…`)
-      const channelKeys = channels.map(ch => ch.channelIdentifier || ch.guid || '').filter(Boolean)
+      const channelKeys = channels
+        .map((ch) => guideKeyForChannel(state.tvProvider, ch))
+        .filter(Boolean)
       try {
-        guideData = await fetchTVGrid(epgId, channelKeys.slice(0, 50), state.tvDate)
+        guideData = await fetchTVGrid(state.tvProvider, channelKeys.slice(0, 50), state.tvDate)
       } catch (e) {
         console.warn('[Plexify] Failed to load guide data:', e)
       }
@@ -1276,7 +1543,7 @@
     }
 
     for (const ch of channels) {
-      const chKey = ch.channelIdentifier || ch.guid || ''
+      const chKey = guideKeyForChannel(state.tvProvider, ch)
       const programs = guideData[chKey] || []
       const row = doc.createElement('div')
       row.className = 'px-guide-ch-row'
@@ -1287,7 +1554,7 @@
       const num = ch.channelNumber || ch.index || ''
       if (ch.thumb) {
         const img = doc.createElement('img')
-        img.src = authenticatedUrl(ch.thumb)
+        img.src = liveTVThumbUrl(ch)
         img.alt = ''
         img.loading = 'lazy'
         chName.appendChild(img)
@@ -1296,7 +1563,7 @@
       nameSpan.textContent = num ? `${num} ${ch.title || ''}` : (ch.title || 'Unknown')
       chName.appendChild(nameSpan)
       chName.title = ch.title || ''
-      chName.addEventListener('click', () => void tuneLiveChannel(ch))
+      chName.addEventListener('click', () => void tuneLiveChannel(ch, null))
 
       // Programs
       const progArea = doc.createElement('div')
@@ -1318,15 +1585,34 @@
 
           const tEl = doc.createElement('div')
           tEl.className = 'px-guide-prog-title'
-          tEl.textContent = prog.title || prog.grandparentTitle || '(No Title)'
+
+          // Plex guide entries use title for the episode title and
+          // grandparentTitle for the series/show title.
+          const showTitle =
+            prog.grandparentTitle ||
+            prog.parentTitle ||
+            prog.originalTitle ||
+            prog.title ||
+            '(No Title)'
+
+          tEl.textContent = showTitle
 
           const tmEl = doc.createElement('div')
           tmEl.className = 'px-guide-prog-time'
           tmEl.textContent = startSec ? `${fmtGuideTime(startSec)} – ${fmtGuideTime(endSec)}` : ''
 
           el.append(tEl, tmEl)
-          el.title = [prog.title, prog.summary].filter(Boolean).join('\n')
-          el.addEventListener('click', () => void tuneLiveChannel(ch))
+
+          // Keep the episode title available in the hover tooltip.
+          const episodeTitle =
+            prog.title && prog.title !== showTitle
+              ? prog.title
+              : ''
+
+          el.title = [showTitle, episodeTitle, prog.summary]
+            .filter(Boolean)
+            .join('\n')
+          el.addEventListener('click', () => void tuneLiveChannel(ch, prog))
           progArea.appendChild(el)
         }
       } else {
@@ -1349,80 +1635,601 @@
     setMain(container)
   }
 
-  async function tuneLiveChannel(channel) {
-    if (!state.server) return
-    const chId = channel.channelIdentifier || channel.guid || channel.key
-    if (!chId) { showToast('No channel identifier found'); return }
+  function addAndPlayLiveResult(result) {
+    const track = ampwin.links.addSearchResult(result, false)
 
-    const dvrKey = state.tvProvider?.dvrKey || state.tvProvider?.id || ''
-    if (!dvrKey) { showToast('No DVR key available'); return }
+    // Match the playback path already used by normal Plexify video items.
+    const tracks = ampwin.playlist?.getTracks?.() || []
+    const index = tracks.findIndex((candidate) => candidate.id === track?.id)
 
-    showToast(`Tuning to ${channel.title || chId}…`)
+    if (index >= 0 && ampwin.playlist?.playIndex) {
+      ampwin.playlist.playIndex(index)
+    } else if (ampwin.links?.play) {
+      // Compatibility fallback for older Ampwin builds.
+      ampwin.links.play(track)
+    }
 
-    try {
-      // Step 1: Tune the channel
-      const tuneUrl = `${state.server.uri}/livetv/dvrs/${encodeURIComponent(dvrKey)}/channels/${encodeURIComponent(chId)}/tune`
-      const tuneResp = await ampwin.network.request({
-        url: tuneUrl,
-        method: 'POST',
-        headers: plexHeaders(state.server.token, { Accept: 'application/json' })
-      })
+    return track
+  }
 
-      let sessionPath = ''
-      try {
-        const tuneBody = typeof tuneResp.body === 'string' ? JSON.parse(tuneResp.body) : tuneResp.body
-        const meta = tuneBody?.MediaContainer?.Metadata?.[0]
-        sessionPath = meta?.key || ''
-        if (!sessionPath && meta?.ratingKey) sessionPath = `/livetv/sessions/${meta.ratingKey}`
-      } catch {
-        // If JSON parse fails, try to extract session from XML-like response
-        const match = typeof tuneResp.body === 'string' && tuneResp.body.match(/key="([^"]*livetv\/sessions\/[^"]*)"/)
-        if (match) sessionPath = match[1]
+  function asArray(value) {
+    if (value === undefined || value === null) return []
+    return Array.isArray(value) ? value : [value]
+  }
+
+  function normalizeTuneIdentifier(value) {
+    if (value === undefined || value === null) return []
+    const raw = String(value).trim()
+    if (!raw) return []
+
+    const values = []
+
+    const add = (candidate) => {
+      if (candidate === undefined || candidate === null) return
+      let normalized = String(candidate).trim()
+      if (!normalized) return
+      try { normalized = decodeURIComponent(normalized) } catch {}
+      normalized = normalized.replace(/^channel:\/\//i, '')
+      normalized = normalized.replace(/^\/+|\/+$/g, '')
+      if (normalized && !values.includes(normalized)) values.push(normalized)
+    }
+
+    // A Plex key can be a full provider path. The tune endpoint needs only
+    // the channel identifier portion.
+    const channelMatch = raw.match(/\/channels\/([^/?#]+)/i)
+    if (channelMatch) add(channelMatch[1])
+
+    add(raw)
+
+    if (raw.includes('/')) {
+      const parts = raw.split('/').filter(Boolean)
+      add(parts[parts.length - 1])
+    }
+
+    return values
+  }
+
+  function collectLiveTVTuneIdentifiers(channel, program) {
+    const candidates = []
+    const add = (value) => {
+      for (const id of normalizeTuneIdentifier(value)) {
+        if (!candidates.includes(id)) candidates.push(id)
       }
+    }
 
-      if (!sessionPath) {
-        showToast('Tune failed — no session returned. Check Plex DVR logs.')
+    // Program metadata is first because Plex's grid response can expose the
+    // exact composite identifier used by /channels/<id>/tune.
+    for (const value of [
+      program?.channelIdentifier,
+      program?.channelId,
+      program?.channelID,
+      program?.channelKey,
+      program?.channelGuid,
+      program?.gridKey,
+      channel?.tuneIdentifier,
+      channel?.channelIdentifier,
+      channel?.identifier,
+      channel?.id,
+      channel?.guid,
+      channel?.key,
+      channel?.gridKey,
+      channel?.channelNumber,
+      channel?.guideNumber,
+      channel?.vcn,
+      channel?.number,
+      channel?.index
+    ]) {
+      add(value)
+    }
+
+    // Composite Plex/XMLTV identifiers are usually safer than display-only
+    // channel numbers, so try them first while retaining numeric fallbacks.
+    return candidates.sort((a, b) => {
+      const aComposite = /[A-Za-z.:_-]/.test(a) ? 1 : 0
+      const bComposite = /[A-Za-z.:_-]/.test(b) ? 1 : 0
+      return bComposite - aComposite
+    })
+  }
+
+  function collectLiveTVSessionPaths(value) {
+    const paths = []
+    const seen = new Set()
+
+    const addPath = (candidate) => {
+      if (candidate === undefined || candidate === null) return
+      const raw = String(candidate).trim()
+      if (!raw) return
+
+      const direct = raw.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
+      if (direct) {
+        const path = `/livetv/sessions/${direct[1]}`
+        if (!paths.includes(path)) paths.push(path)
         return
       }
 
-      // Step 2: Build transcoded stream URL
-      const q = QUALITY_MAP[state.videoQuality] || QUALITY_MAP['720p']
-      const streamUrl = new URL('/video/:/transcode/universal/start.mp4', `${state.server.uri}/`)
-      streamUrl.searchParams.set('path', sessionPath)
-      streamUrl.searchParams.set('mediaIndex', '0')
-      streamUrl.searchParams.set('partIndex', '0')
-      streamUrl.searchParams.set('protocol', 'http')
-      streamUrl.searchParams.set('offset', '0')
-      streamUrl.searchParams.set('fastSeek', '1')
-      streamUrl.searchParams.set('directPlay', '0')
-      streamUrl.searchParams.set('directStream', '1')
-      streamUrl.searchParams.set('directStreamAudio', '0')
-      streamUrl.searchParams.set('videoQuality', '100')
-      streamUrl.searchParams.set('maxVideoBitrate', String(q.bitrate))
-      streamUrl.searchParams.set('videoResolution', q.resolution)
-      streamUrl.searchParams.set('audioBoost', '100')
-      streamUrl.searchParams.set('location', 'lan')
-      streamUrl.searchParams.set('subtitles', 'burn')
-      streamUrl.searchParams.set('hasMDE', '1')
-      streamUrl.searchParams.set('autoAdjustQuality', '0')
-      streamUrl.searchParams.set('X-Plex-Session-Identifier', crypto.randomUUID())
-      streamUrl.searchParams.set('X-Plex-Platform', 'Chrome')
-      streamUrl.searchParams.set('X-Plex-Token', state.server.token)
-      streamUrl.searchParams.set('X-Plex-Client-Identifier', clientId)
-      streamUrl.searchParams.set('X-Plex-Product', PRODUCT)
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+        const path = `/livetv/sessions/${raw}`
+        if (!paths.includes(path)) paths.push(path)
+      }
+    }
 
-      const url = streamUrl.toString()
-      const title = `📺 ${channel.title || chId}`
-      const thumb = channel.thumb ? authenticatedUrl(channel.thumb) : ''
+    const walk = (node, parentKey = '') => {
+      if (node === undefined || node === null) return
 
-      // Step 3: Play via addSearchResult
-      const result = { url, title, durationSec: 0, uploader: 'Live TV', thumbnail: thumb }
-      const track = ampwin.links.addSearchResult(result, false)
-      ampwin.links.play(track)
-      showToast(`Now watching: ${channel.title || chId}`)
-    } catch (err) {
-      console.error('[Plexify] Tune failed:', err)
-      showToast(`Failed to tune: ${err?.message || err}`)
+      if (typeof node === 'string' || typeof node === 'number') {
+        if (
+          /^(key|ratingKey|session|sessionKey|uuid)$/i.test(parentKey) ||
+          String(node).includes('/livetv/sessions/')
+        ) {
+          addPath(node)
+        }
+        return
+      }
+
+      if (typeof node !== 'object' || seen.has(node)) return
+      seen.add(node)
+
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, parentKey)
+        return
+      }
+
+      for (const [key, child] of Object.entries(node)) {
+        walk(child, key)
+      }
+    }
+
+    walk(value)
+    return paths
+  }
+
+  function firstObject(value) {
+    if (!value) return null
+    if (Array.isArray(value)) {
+      return value.find((item) => item && typeof item === 'object') || null
+    }
+    return typeof value === 'object' ? value : null
+  }
+
+  function extractLocalDvrTuneMetadata(tuneBody) {
+    const container = tuneBody?.MediaContainer || tuneBody || {}
+    const subscription = firstObject(container.MediaSubscription)
+    const operation = firstObject(subscription?.MediaGrabOperation)
+
+    const nestedMetadata = firstObject(operation?.Metadata)
+    if (nestedMetadata) return nestedMetadata
+
+    return firstObject(container.Metadata)
+  }
+
+  function extractLiveTVSessionPathFromText(rawBody) {
+    if (!rawBody) return ''
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const metadata = extractLocalDvrTuneMetadata(parsed)
+      const metadataKey = String(metadata?.key || '')
+      if (metadataKey.includes('/livetv/sessions/')) return metadataKey
+
+      const jsonPath = collectLiveTVSessionPaths(parsed)[0]
+      if (jsonPath) return jsonPath
+    } catch {}
+
+    // Prefer a Metadata key over any unrelated UUID elsewhere in the response.
+    const metadataKey =
+      rawBody.match(/<Metadata\b[^>]*\bkey=["']([^"']*\/livetv\/sessions\/[^"']+)["']/i) ||
+      rawBody.match(/["']key["']\s*:\s*["']([^"']*\/livetv\/sessions\/[^"']+)["']/i)
+
+    if (metadataKey?.[1]) return metadataKey[1]
+
+    const direct = rawBody.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
+    if (direct) return `/livetv/sessions/${direct[1]}`
+
+    return ''
+  }
+
+  function extractLocalDvrRatingKey(rawBody) {
+    if (!rawBody) return ''
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const metadata = extractLocalDvrTuneMetadata(parsed)
+      return String(metadata?.ratingKey || metadata?.key || '')
+    } catch {}
+
+    const match =
+      rawBody.match(/<Metadata\b[^>]*\bratingKey=["']([^"']+)["']/i) ||
+      rawBody.match(/["']ratingKey["']\s*:\s*["']?([^"',}\s]+)["']?/i)
+
+    return match?.[1] || ''
+  }
+
+  async function currentLiveTVSessionPaths() {
+    try {
+      const sessions = await serverJson('/livetv/sessions')
+      return collectLiveTVSessionPaths(sessions)
+    } catch {
+      return []
+    }
+  }
+
+  async function requestLocalDvrTune(dvrKey, tuneId, sessionsBefore) {
+    const sessionIdentifier = crypto.randomUUID()
+    const tuneUrl = new URL(
+      `/livetv/dvrs/${encodeURIComponent(dvrKey)}` +
+      `/channels/${encodeURIComponent(tuneId)}/tune`,
+      `${state.server.uri}/`
+    )
+
+    // Plex's DVR tune and transcode-decision requests must share this ID.
+    tuneUrl.searchParams.set(
+      'X-Plex-Session-Identifier',
+      sessionIdentifier
+    )
+
+    const tuneResp = await ampwin.network.request({
+      url: tuneUrl.toString(),
+      method: 'POST',
+      timeoutMs: 60_000,
+      headers: plexHeaders(state.server.token, {
+        Accept: 'application/json, application/xml'
+      })
+    })
+
+    if (!tuneResp?.ok) {
+      const detail = typeof tuneResp?.body === 'string'
+        ? tuneResp.body.slice(0, 240)
+        : ''
+      throw new Error(
+        `HTTP ${tuneResp?.status || 'unknown'}` +
+        (detail ? `: ${detail}` : '')
+      )
+    }
+
+    const rawBody = typeof tuneResp.body === 'string'
+      ? tuneResp.body
+      : JSON.stringify(tuneResp.body || '')
+
+    let sessionPath = extractLiveTVSessionPathFromText(rawBody)
+
+    // Some PMS builds acknowledge tuning before exposing the session in the
+    // response. Poll only as a fallback.
+    if (!sessionPath) {
+      for (let attempt = 0; attempt < 5 && !sessionPath; attempt++) {
+        await sleep(250)
+        const after = await currentLiveTVSessionPaths()
+        sessionPath =
+          after.find((path) => !sessionsBefore.has(path)) ||
+          (after.length === 1 ? after[0] : '')
+      }
+    }
+
+    return {
+      sessionPath,
+      ratingKey: extractLocalDvrRatingKey(rawBody),
+      sessionIdentifier,
+      rawBody,
+      tuneUrl: tuneUrl.toString()
+    }
+  }
+
+
+  async function sendLiveTVTimeline(live, playbackState = 'playing') {
+    if (!live || !state.server) return
+
+    try {
+      const url = new URL('/:/timeline', `${state.server.uri}/`)
+      if (live.ratingKey) {
+        url.searchParams.set('ratingKey', live.ratingKey)
+      }
+      url.searchParams.set('key', live.sessionPath)
+      url.searchParams.set('playbackTime', '0')
+      url.searchParams.set('state', playbackState)
+      url.searchParams.set('hasMDE', '1')
+      url.searchParams.set('time', '0')
+      url.searchParams.set('duration', '4294967296000')
+      url.searchParams.set(
+        'X-Plex-Session-Identifier',
+        live.sessionIdentifier
+      )
+      url.searchParams.set('X-Plex-Client-Identifier', clientId)
+      url.searchParams.set('X-Plex-Product', PRODUCT)
+      url.searchParams.set('X-Plex-Token', state.server.token)
+
+      await request({
+        url: url.toString(),
+        method: 'GET',
+        timeoutMs: 10_000,
+        headers: plexHeaders(state.server.token)
+      })
+    } catch (error) {
+      console.warn('[Plexify] Live TV timeline update failed:', error)
+    }
+  }
+
+  function stopLiveTVKeepalive(sendStopped = false) {
+    const live = state.tvLiveSession
+    state.tvLiveSession = null
+    if (!live) return
+
+    if (live.keepaliveTimer) clearInterval(live.keepaliveTimer)
+    if (sendStopped) void sendLiveTVTimeline(live, 'stopped')
+  }
+
+  function startLiveTVKeepalive(info) {
+    stopLiveTVKeepalive(true)
+
+    const live = {
+      ...info,
+      keepaliveTimer: null
+    }
+
+    state.tvLiveSession = live
+    void sendLiveTVTimeline(live, 'playing')
+
+    live.keepaliveTimer = setInterval(() => {
+      if (state.tvLiveSession !== live) return
+      void sendLiveTVTimeline(live, 'playing')
+    }, 30_000)
+  }
+
+  function encodePlexQuery(params) {
+    return Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`
+      )
+      .join('&')
+  }
+
+  async function buildLocalDvrStream(
+    sessionPath,
+    sessionIdentifier
+  ) {
+    if (!state.server) throw new Error('No Plex server selected')
+
+    const transcodeSessionId = crypto.randomUUID()
+
+    // This parameter set mirrors current Plex DVR clients. The tune request,
+    // decision request, timeline updates, and final stream all reuse the same
+    // X-Plex-Session-Identifier.
+    const params = {
+      hasMDE: 1,
+      path: sessionPath,
+      mediaIndex: 0,
+      partIndex: 0,
+      protocol: 'http',
+      fastSeek: 1,
+      directPlay: 0,
+      directStream: 1,
+      subtitleSize: 100,
+      audioBoost: 100,
+      location: 'lan',
+      addDebugOverlay: 0,
+      autoAdjustQuality: 0,
+      directStreamAudio: 1,
+      advancedSubtitles: 'text',
+      mediaBufferSize: 157286,
+      session: transcodeSessionId,
+      subtitles: 'auto',
+      copyts: 0,
+      'Accept-Language': 'en',
+      'X-Plex-Session-Identifier': sessionIdentifier,
+      'X-Plex-Chunked': 1,
+      'X-Plex-Incomplete-Segments': 1,
+      'X-Plex-Product': PRODUCT,
+      'X-Plex-Version': VERSION,
+      'X-Plex-Client-Identifier': clientId,
+      'X-Plex-Platform': 'Flutter',
+      'X-Plex-Client-Profile-Name': 'Plex Desktop',
+      'X-Plex-Token': state.server.token
+    }
+
+    const query = encodePlexQuery(params)
+    const decisionUrl =
+      `${state.server.uri}/video/:/transcode/universal/decision?${query}`
+
+    // Plex expects the transcode decision before the start request. The old
+    // start.mpd shortcut returned HTTP 400 because it skipped this step and
+    // used the wrong protocol/profile combination.
+    const decision = await request({
+      url: decisionUrl,
+      method: 'GET',
+      timeoutMs: 30_000,
+      headers: {
+        Accept: 'application/json, application/xml, text/xml, */*',
+        'Accept-Language': 'en'
+      }
+    })
+
+    if (!decision.ok) {
+      const detail = decision.body?.slice(0, 500) || ''
+      console.error('[Plexify] Live TV transcode decision failed', {
+        status: decision.status,
+        body: detail,
+        decisionUrl
+      })
+      throw new Error(
+        `Plex Live TV decision returned HTTP ${decision.status}` +
+        (detail ? `: ${detail}` : '')
+      )
+    }
+
+    console.info('[Plexify] Live TV transcode decision accepted', {
+      sessionPath,
+      sessionIdentifier,
+      transcodeSessionId,
+      preview: decision.body?.slice(0, 500)
+    })
+
+    // Ampwin recognizes the .mp4 route as direct video and therefore preserves
+    // the complete Plex query instead of handing the URL to yt-dlp. Plex's
+    // universal HTTP transcoder uses the same accepted decision parameters.
+    const streamUrl =
+      `${state.server.uri}/video/:/transcode/universal/start.mp4?${query}`
+
+    return {
+      url: streamUrl,
+      sessionIdentifier,
+      transcodeSessionId
+    }
+  }
+
+
+  async function tunePlexCloudChannel(channel) {
+    const token = localStorage.getItem(STORAGE.userToken)
+    const streamKey = channel?._streamKey || cloudStreamKey(channel)
+
+    if (!token) {
+      toast('No Plex account token is available')
+      return
+    }
+    if (channel?._drm || cloudChannelHasDrm(channel)) {
+      toast('This Plex channel uses DRM and cannot be played by Plexify yet')
+      return
+    }
+    if (!streamKey) {
+      toast('Plex returned no playable stream for this channel')
+      return
+    }
+
+    const streamUrl = new URL(streamKey, 'https://epg.provider.plex.tv/')
+    streamUrl.searchParams.set('X-Plex-Token', token)
+    streamUrl.searchParams.set('X-Plex-Client-Identifier', clientId)
+
+    const title = `📺 ${channel.title || channel.callSign || 'Plex Channel'}`
+    const result = {
+      url: streamUrl.toString(),
+      title,
+      durationSec: 0,
+      uploader: 'Plex Channels',
+      thumbnail: liveTVThumbUrl(channel)
+    }
+    addAndPlayLiveResult(result)
+    toast(`Starting: ${channel.title || channel.callSign || 'Plex Channel'}`)
+  }
+
+  async function tuneLiveChannel(channel, program = null) {
+    if (state.tvProvider?.type === 'plex-cloud') {
+      await tunePlexCloudChannel(channel)
+      return
+    }
+
+    if (!state.server) return
+
+    const tuneIds = collectLiveTVTuneIdentifiers(channel, program)
+    if (!tuneIds.length) {
+      toast('No DVR channel identifier was returned by Plex')
+      return
+    }
+
+    const dvrKey = state.tvProvider?.dvrKey || ''
+    if (!dvrKey) {
+      toast('No DVR key available')
+      return
+    }
+
+    const displayTitle =
+      program?.grandparentTitle ||
+      program?.parentTitle ||
+      program?.title ||
+      channel.title ||
+      tuneIds[0]
+
+    toast(`Tuning to ${displayTitle}…`)
+
+    try {
+      const sessionsBefore = new Set(await currentLiveTVSessionPaths())
+      let successfulTune = null
+      let successfulTuneId = ''
+      const diagnostics = []
+
+      // The lineup/grid APIs do not always expose the same field as the tune
+      // endpoint expects. Try every plausible raw Plex identifier, not merely
+      // the display channel number.
+      for (const tuneId of tuneIds) {
+        try {
+          const result = await requestLocalDvrTune(
+            dvrKey,
+            tuneId,
+            sessionsBefore
+          )
+
+          diagnostics.push({
+            tuneId,
+            tuneUrl: result.tuneUrl,
+            response: result.rawBody.slice(0, 1000)
+          })
+
+          if (result.sessionPath) {
+            successfulTune = result
+            successfulTuneId = tuneId
+            break
+          }
+        } catch (error) {
+          diagnostics.push({
+            tuneId,
+            error: error?.message || String(error)
+          })
+        }
+      }
+
+      if (!successfulTune) {
+        console.warn(
+          '[Plexify] DVR tune produced no Live TV session',
+          {
+            channel,
+            program,
+            attemptedTuneIds: tuneIds,
+            diagnostics
+          }
+        )
+        toast(
+          `Plex returned no DVR session. Tried channel IDs: ` +
+          tuneIds.slice(0, 4).join(', ')
+        )
+        return
+      }
+
+      const sessionPath = successfulTune.sessionPath
+
+      console.info(
+        '[Plexify] DVR tune session opened',
+        {
+          successfulTuneId,
+          sessionPath,
+          sessionIdentifier: successfulTune.sessionIdentifier,
+          ratingKey: successfulTune.ratingKey
+        }
+      )
+
+      const livePlayback = await buildLocalDvrStream(
+        sessionPath,
+        successfulTune.sessionIdentifier
+      )
+
+      const result = {
+        url: livePlayback.url,
+        title: `📺 ${displayTitle}`,
+        durationSec: 0,
+        uploader: state.server.name || 'Live TV',
+        thumbnail: liveTVThumbUrl(channel)
+      }
+
+      addAndPlayLiveResult(result)
+      startLiveTVKeepalive({
+        url: livePlayback.url,
+        sessionPath,
+        ratingKey:
+          successfulTune.ratingKey ||
+          String(program?.ratingKey || ''),
+        sessionIdentifier: livePlayback.sessionIdentifier,
+        transcodeSessionId: livePlayback.transcodeSessionId
+      })
+      toast(`Starting: ${displayTitle}`)
+    } catch (error) {
+      console.error('[Plexify] DVR tune failed:', error)
+      toast(`Failed to tune: ${error?.message || error}`)
     }
   }
 
@@ -1435,12 +2242,21 @@
 
   function transcodedUrl(full) {
     if (!state.server) return ''
+
     const q = QUALITY_MAP[state.videoQuality] || QUALITY_MAP['720p']
-    const url = new URL('/video/:/transcode/universal/start.mp4', `${state.server.uri}/`)
+    const playbackSession = crypto.randomUUID()
+
+    // Retained only as a legacy helper. Normal library playback now uses the
+    // authenticated original Part URL so Ampwin's generic seek path works.
+    const url = new URL(
+      '/video/:/transcode/universal/start.m3u8',
+      `${state.server.uri}/`
+    )
+
     url.searchParams.set('path', `/library/metadata/${full.ratingKey}`)
     url.searchParams.set('mediaIndex', '0')
     url.searchParams.set('partIndex', '0')
-    url.searchParams.set('protocol', 'http')
+    url.searchParams.set('protocol', 'hls')
     url.searchParams.set('offset', '0')
     url.searchParams.set('fastSeek', '1')
     url.searchParams.set('directPlay', '0')
@@ -1454,11 +2270,15 @@
     url.searchParams.set('subtitles', 'burn')
     url.searchParams.set('hasMDE', '1')
     url.searchParams.set('autoAdjustQuality', '0')
-    url.searchParams.set('X-Plex-Session-Identifier', crypto.randomUUID())
+    url.searchParams.set('session', playbackSession)
+    url.searchParams.set('X-Plex-Session-Identifier', playbackSession)
+    url.searchParams.set('X-Plex-Chunked', '1')
+    url.searchParams.set('X-Plex-Client-Profile-Name', 'Chrome')
     url.searchParams.set('X-Plex-Platform', 'Chrome')
     url.searchParams.set('X-Plex-Token', state.server.token)
     url.searchParams.set('X-Plex-Client-Identifier', clientId)
     url.searchParams.set('X-Plex-Product', PRODUCT)
+
     return url.toString()
   }
 
@@ -1470,8 +2290,12 @@
     const title = trackTitle(full)
     const artist = full.grandparentTitle || full.parentTitle || full.originalTitle || full.studio || ''
     const durationSec = Math.round((full.duration || 0) / 1000)
-    // For video content, use server-side transcoding unless user chose 'original'
-    const path = (audioOnly || state.videoQuality === 'original') ? directPath : transcodedUrl(full)
+    // Always give Ampwin the real Plex media Part URL for normal libraries.
+    // A Plex universal-transcode response is a live/progressive request anchored
+    // to offset=0, so ordinary HTML-video seeking restarts it. The original Part
+    // URL is byte-seekable, and Ampwin's existing generic ffmpeg/MSE fallback
+    // handles unsupported containers/codecs without any Plex-specific host code.
+    const path = directPath
     return {
       full,
       path,
@@ -1600,8 +2424,61 @@
       .replace(/'/g, '&#39;')
   }
 
+  function isPlexPlaybackTrack(track) {
+    const path = String(track?.path || '')
+    return (
+      path.includes('/video/:/transcode/universal/') ||
+      path.includes('/livetv/sessions/') ||
+      path.includes('/library/parts/') ||
+      path.includes('epg.provider.plex.tv')
+    )
+  }
+
+  function installPlaybackDiagnostics() {
+    if (!ampwin.player?.on) return
+
+    if (!state.playerTrackUnsub) {
+      state.playerTrackUnsub = ampwin.player.on('track', (track) => {
+        const live = state.tvLiveSession
+        if (!live) return
+
+        const activePath = String(track?.path || '')
+        if (activePath !== live.url) stopLiveTVKeepalive(true)
+      })
+    }
+
+    if (state.playerErrorUnsub) return
+
+    state.playerErrorUnsub = ampwin.player.on('error', (message, track) => {
+      if (!isPlexPlaybackTrack(track)) return
+
+      console.error('[Plexify] Ampwin rejected Plex playback:', {
+        message,
+        track
+      })
+
+      const path = String(track?.path || '')
+      if (
+        state.tvLiveSession &&
+        path === state.tvLiveSession.url
+      ) {
+        stopLiveTVKeepalive(true)
+      }
+      const resolverMisclassified =
+        /can't play this without signing in/i.test(String(message)) &&
+        path.includes('/video/:/transcode/universal/')
+
+      toast(
+        resolverMisclassified
+          ? 'Plex playback failed: Ampwin treated the Plex stream as a website link'
+          : `Plex playback failed: ${message}`
+      )
+    })
+  }
+
   function boot() {
     installIntoSkin()
+    installPlaybackDiagnostics()
     if (!ampwin.network?.request) console.warn('Plexify: ampwin.network.request is unavailable')
     
     // Robustly ensure the button stays injected even after skin reloads
@@ -1622,6 +2499,11 @@
 
   window.addEventListener('unload', () => {
     if (state.watchdog) clearInterval(state.watchdog)
+    stopLiveTVKeepalive(true)
+    try { state.playerErrorUnsub?.() } catch {}
+    try { state.playerTrackUnsub?.() } catch {}
+    state.playerErrorUnsub = null
+    state.playerTrackUnsub = null
     try { state.authWindow?.close() } catch {}
     try { state.appWindow?.close() } catch {}
     removeHostFallback()

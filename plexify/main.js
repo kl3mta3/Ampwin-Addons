@@ -4,7 +4,7 @@
 
   const ADDON_ID = 'plexify'
   const PRODUCT = 'Plexify'
-  const VERSION = '1.2.0'
+  const VERSION = '1.2.1'
   const STORAGE = {
     clientId: `${ADDON_ID}:client-id`,
     userToken: `${ADDON_ID}:user-token`,
@@ -38,10 +38,11 @@
     tvProvider: null,
     tvChannels: [],
     tvGuideData: {},
-    tvDate: new Date().toISOString().slice(0, 10),
+    tvDate: localDateKey(),
     tvLiveSession: null,
     playerErrorUnsub: null,
-    playerTrackUnsub: null
+    playerTrackUnsub: null,
+    tvNowTimer: null
   }
 
   const clientId = getOrCreate(STORAGE.clientId, () => crypto.randomUUID())
@@ -56,6 +57,13 @@
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  function localDateKey(date = new Date()) {
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
   }
 
   function plexHeaders(token, extra = {}) {
@@ -220,6 +228,7 @@
   }
 
   function signOut() {
+    clearGuideNowTimer()
     stopLiveTVKeepalive(true)
     localStorage.removeItem(STORAGE.userToken)
     localStorage.removeItem(STORAGE.serverId)
@@ -351,6 +360,7 @@
   function closeModal() {
     const appWindow = state.appWindow
     state.modalOpen = false
+    clearGuideNowTimer()
     removeContextMenu()
     state.overlay?.remove()
     state.overlay = null
@@ -490,35 +500,63 @@
     #plexify-modal .px-guide-controls button:hover { background: rgba(229,160,13,.3); }
     #plexify-modal .px-guide-controls .px-guide-date { color: var(--text, #c8ccd4); font-weight: 600; font-size: 13px; }
     #plexify-modal .px-guide-channels { position: relative; overflow: auto; max-height: calc(100vh - 160px); border: 1px solid rgba(127,127,127,.15); border-radius: 5px; }
+    #plexify-modal .px-guide-time-row { position: sticky; top: 0; z-index: 8; display: flex;
+      height: 30px; min-height: 30px; color: #b9c8dc; background: #12171e;
+      border-bottom: 1px solid rgba(127,127,127,.28); }
+    #plexify-modal .px-guide-time-corner { position: sticky; left: 0; z-index: 10;
+      width: 130px; flex: 0 0 130px; background: #12171e;
+      border-right: 2px solid rgba(127,127,127,.42);
+      box-shadow: 6px 0 10px rgba(0,0,0,.32); }
+    #plexify-modal .px-guide-time-axis { position: relative; display: flex;
+      height: 30px; flex: 0 0 auto; overflow: hidden; }
+    #plexify-modal .px-guide-time-slot { position: relative; height: 30px;
+      flex: 0 0 100px; padding: 7px 8px 0;
+      border-left: 1px solid rgba(127,127,127,.22);
+      font-size: 10px; white-space: nowrap; pointer-events: none; }
+    #plexify-modal .px-guide-time-now { position: absolute; top: 0; bottom: 0; width: 3px;
+      background: #fff; box-shadow: -1px 0 0 rgba(0,0,0,.8), 1px 0 0 rgba(0,0,0,.8);
+      pointer-events: none; z-index: 9; }
+    #plexify-modal .px-guide-time-now::before { content: ''; position: absolute; top: 0; left: 50%;
+      transform: translateX(-50%); border-left: 6px solid transparent;
+      border-right: 6px solid transparent; border-top: 8px solid #fff; }
     #plexify-modal .px-guide-ch-row { display: flex; min-height: 48px; border-bottom: 1px solid rgba(127,127,127,.1); }
     #plexify-modal .px-guide-ch-name { width: 130px; flex: 0 0 130px; display: flex; align-items: center;
-      gap: 6px; padding: 4px 8px; background: rgba(0,0,0,.25); border-right: 1px solid rgba(127,127,127,.15);
-      position: sticky; left: 0; z-index: 4; font-size: 11px; font-weight: 600; cursor: pointer; }
+      gap: 6px; padding: 4px 8px; background: #0d1117;
+      border-right: 2px solid rgba(127,127,127,.42);
+      box-shadow: 6px 0 10px rgba(0,0,0,.32);
+      position: sticky; left: 0; z-index: 6; overflow: hidden;
+      font-size: 11px; font-weight: 600; cursor: pointer; }
+    #plexify-modal .px-guide-ch-name span { min-width: 0; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
     #plexify-modal .px-guide-ch-name:hover { background: rgba(229,160,13,.12); }
     #plexify-modal .px-guide-ch-name img { width: 26px; height: 26px; border-radius: 3px; object-fit: contain;
       background: #000; flex-shrink: 0; }
-    #plexify-modal .px-guide-programs { position: relative; display: flex; flex: 0 0 auto; min-width: 0; overflow: visible; }
+    #plexify-modal .px-guide-programs { display: flex; flex: 0 0 auto; min-width: 0; overflow: visible; }
     #plexify-modal .px-guide-gap { flex: 0 0 auto; min-width: 0; border-right: 1px solid rgba(255,255,255,.035); }
-    #plexify-modal .px-guide-prog { position: relative; padding: 4px 8px; border-right: 1px solid rgba(127,127,127,.08);
-      cursor: pointer; display: flex; flex-direction: column; justify-content: center; overflow: hidden;
-      transition: background .15s; }
-    #plexify-modal .px-guide-prog:hover { background: rgba(229,160,13,.15); }
-    #plexify-modal .px-guide-prog-title { position: relative; z-index: 2; font-size: 11px; font-weight: 600; white-space: nowrap;
-      overflow: hidden; text-overflow: ellipsis; }
-    #plexify-modal .px-guide-prog-time { position: relative; z-index: 2; font-size: 9px; color: var(--text-dim, #8992a1); white-space: nowrap; }
-    #plexify-modal .px-guide-prog-progress { position: absolute; left: 0; top: 0; bottom: 0;
-      background: rgba(255,255,255,.08); pointer-events: none; z-index: 1; }
-    #plexify-modal .px-guide-prog-progress-bar { position: absolute; left: 0; bottom: 0; height: 2px;
-      background: rgba(229,160,13,.9); pointer-events: none; z-index: 2; }
-    #plexify-modal .px-guide-prog.px-airing { background: rgba(229,160,13,.08); border-left: 2px solid #e5a00d; }
-    #plexify-modal .px-guide-now-line { position: absolute; top: 0; bottom: 0; width: 2px;
-      background: rgba(232,236,244,.75); box-shadow: 0 0 0 1px rgba(0,0,0,.22);
-      pointer-events: none; z-index: 3; }
-    #plexify-modal .px-guide-now-line::before { content: ''; position: absolute; top: 0; left: 50%;
-      width: 8px; height: 8px; border-radius: 999px; transform: translate(-50%, -40%);
-      background: #eceff5; box-shadow: 0 0 0 2px rgba(13,17,24,.7); }
-    #plexify-modal .px-guide-loading { padding: 30px; text-align: center; color: var(--text-dim, #8992a1); }
-  `
+    #plexify-modal .px-guide-prog { position: relative; z-index: 1; min-width: 0; padding: 4px 8px;
+      color: inherit; background: transparent; border: 0; border-right: 1px solid rgba(127,127,127,.08);
+      border-radius: 0; cursor: pointer; pointer-events: auto; display: flex; flex-direction: column;
+      justify-content: center; overflow: hidden; text-align: left; transition: background .15s; }
+    #plexify-modal .px-guide-prog:hover { background-color: rgba(229,160,13,.15); }
+    #plexify-modal .px-guide-prog-title { position: relative; z-index: 2; font-size: 11px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+    #plexify-modal .px-guide-prog-time { position: relative; z-index: 2; font-size: 9px;
+      color: var(--text-dim, #8992a1); white-space: nowrap; pointer-events: none; }
+    #plexify-modal .px-guide-current-progress {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+  z-index: 1;
+  overflow: hidden;} 
+  #plexify-modal .px-guide-current-fill {position: absolute; left: 0; top: 0;
+  bottom: 0; width: 0; background: rgba(229,160,13,.22); border-bottom: 3px solid #e5a00d; pointer-events: none !important;}
+  #plexify-modal .px-guide-current-line {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 4px; transform: translateX(-2px); background: #fff; box-shadow: -1px 0 0 rgba(0,0,0,.75),1px 0 0 rgba(0,0,0,.75); pointer-events: none !important;}
+#plexify-modal .px-guide-current-line::before {
+  content: ''; position: absolute;top: 0; left: 50%; transform: translate(-50%, 0); border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid #fff; pointer-events: none;}
+#plexify-modal .px-guide-prog.px-airing {
+  background-color: rgba(229,160,13,.08);}
+#plexify-modal .px-guide-loading { padding: 30px; text-align: center; color: var(--text-dim, #8992a1); }`
 
   function mountModal(doc) {
     if (!doc?.body) return
@@ -820,6 +858,7 @@
 
   async function renderRoute(route) {
     const nonce = ++state.routeNonce
+    if (route.type !== 'livetv') clearGuideNowTimer()
     showMessage(`Loading ${route.title}…`)
     try {
       let data
@@ -1479,12 +1518,71 @@
     renderGuideGrid(channels.slice(0, 50), guideData)
   }
 
+  function clearGuideNowTimer() {
+    if (state.tvNowTimer) clearInterval(state.tvNowTimer)
+    state.tvNowTimer = null
+  }
+
+function guideEpochSeconds(value) {
+  const number = Number(value || 0)
+
+  if (!Number.isFinite(number) || number <= 0) {
+    return 0
+  }
+
+  // Accept either Unix seconds or Unix milliseconds.
+  return number > 100_000_000_000
+    ? number / 1000
+    : number
+}
+
+  function programBeginsAt(program) {
+    return program?.beginsAt ?? program?.Media?.[0]?.beginsAt ?? 0
+  }
+
+  function programEndsAt(program) {
+    return program?.endsAt ?? program?.Media?.[0]?.endsAt ?? 0
+  }
+
+  function channelDisplayParts(channel) {
+    const number = String(
+      channel?.channelNumber ||
+      channel?.guideNumber ||
+      channel?.vcn ||
+      channel?.number ||
+      channel?.index ||
+      ''
+    ).trim()
+
+    let title = String(
+      channel?.title ||
+      channel?.guideName ||
+      channel?.callSign ||
+      channel?.name ||
+      'Unknown'
+    ).trim()
+
+    if (number && title.startsWith(number)) {
+      const remainder = title.slice(number.length)
+      if (/^[\s\-:·]+/.test(remainder)) {
+        title = remainder.replace(/^[\s\-:·]+/, '').trim() || title
+      }
+    }
+
+    return {
+      number,
+      title,
+      label: number ? `${number} ${title}` : title
+    }
+  }
+
   function renderGuideGrid(channels, guideData) {
+    clearGuideNowTimer()
+
     const doc = state.uiDoc
     const container = doc.createElement('div')
     container.className = 'px-guide'
 
-    // ── Controls bar ──
     const controls = doc.createElement('div')
     controls.className = 'px-guide-controls'
 
@@ -1497,8 +1595,10 @@
       opt.selected = prov.id === state.tvProvider?.id
       provSelect.appendChild(opt)
     }
-    provSelect.addEventListener('change', (e) => {
-      state.tvProvider = state.tvProviders.find(p => p.id === e.target.value) || state.tvProviders[0]
+    provSelect.addEventListener('change', (event) => {
+      state.tvProvider =
+        state.tvProviders.find((provider) => provider.id === event.target.value) ||
+        state.tvProviders[0]
       void navigate({ type: 'livetv', title: 'Live TV' }, false)
     })
 
@@ -1506,9 +1606,9 @@
     prevBtn.textContent = '◀'
     prevBtn.title = 'Previous day'
     prevBtn.addEventListener('click', () => {
-      const d = new Date(state.tvDate + 'T12:00:00')
-      d.setDate(d.getDate() - 1)
-      state.tvDate = d.toISOString().slice(0, 10)
+      const date = new Date(state.tvDate + 'T12:00:00')
+      date.setDate(date.getDate() - 1)
+      state.tvDate = localDateKey(date)
       void navigate({ type: 'livetv', title: 'Live TV' }, false)
     })
 
@@ -1520,230 +1620,671 @@
     nextBtn.textContent = '▶'
     nextBtn.title = 'Next day'
     nextBtn.addEventListener('click', () => {
-      const d = new Date(state.tvDate + 'T12:00:00')
-      d.setDate(d.getDate() + 1)
-      state.tvDate = d.toISOString().slice(0, 10)
+      const date = new Date(state.tvDate + 'T12:00:00')
+      date.setDate(date.getDate() + 1)
+      state.tvDate = localDateKey(date)
       void navigate({ type: 'livetv', title: 'Live TV' }, false)
     })
 
     const todayBtn = doc.createElement('button')
     todayBtn.textContent = 'Today'
     todayBtn.addEventListener('click', () => {
-      state.tvDate = new Date().toISOString().slice(0, 10)
+      state.tvDate = localDateKey()
       void navigate({ type: 'livetv', title: 'Live TV' }, false)
     })
 
     const refreshBtn = doc.createElement('button')
     refreshBtn.textContent = '↻ Refresh'
-    refreshBtn.addEventListener('click', () => void navigate({ type: 'livetv', title: 'Live TV' }, false))
+    refreshBtn.addEventListener('click', () => {
+      void navigate({ type: 'livetv', title: 'Live TV' }, false)
+    })
 
-    controls.append(provSelect, prevBtn, dateLabel, nextBtn, todayBtn, refreshBtn)
+    const isToday = state.tvDate === localDateKey()
+
+    controls.append(
+      provSelect,
+      prevBtn,
+      dateLabel,
+      nextBtn,
+      todayBtn,
+      refreshBtn
+    )
     container.appendChild(controls)
 
-    // ── Channel rows ──
     const scrollArea = doc.createElement('div')
     scrollArea.className = 'px-guide-channels'
-    const nowMs = Date.now()
-    const nowSec = nowMs / 1000
-    const isToday = state.tvDate === new Date().toISOString().slice(0, 10)
+
+    const CHANNEL_WIDTH = 130
     const HOUR_PX = 200
-    const CHANNEL_COL_PX = 130
+    const HALF_HOUR = 1800
+    const HALF_HOUR_PX = HOUR_PX / 2
+    const initialNowSec = Date.now() / 1000
 
-    let minStartSec = Number.POSITIVE_INFINITY
-    let maxEndSec = 0
+    let earliestProgramStart = Number.POSITIVE_INFINITY
+    let latestProgramEnd = 0
 
-    for (const ch of channels) {
-      const chKey = guideKeyForChannel(state.tvProvider, ch)
-      const programs = guideData[chKey] || []
-      for (const prog of programs) {
-        const startSec = Number(prog.beginsAt || 0)
-        const endSec = Number(prog.endsAt || (startSec + 1800))
-        if (startSec > 0) minStartSec = Math.min(minStartSec, startSec)
-        if (endSec > 0) maxEndSec = Math.max(maxEndSec, endSec)
+    for (const channel of channels) {
+      const channelKey = guideKeyForChannel(state.tvProvider, channel)
+      const programs = guideData[channelKey] || []
+
+      for (const program of programs) {
+        const startSec = guideEpochSeconds(programBeginsAt(program))
+        const endSec =
+          guideEpochSeconds(programEndsAt(program)) ||
+          (startSec + HALF_HOUR)
+
+        if (startSec > 0) {
+          earliestProgramStart = Math.min(
+            earliestProgramStart,
+            startSec
+          )
+        }
+
+        if (endSec > 0) {
+          latestProgramEnd = Math.max(
+            latestProgramEnd,
+            endSec
+          )
+        }
       }
     }
 
-    if (!Number.isFinite(minStartSec)) {
-      minStartSec = isToday
-        ? Math.floor(nowSec / 1800) * 1800
-        : Math.floor(new Date(state.tvDate + 'T00:00:00').getTime() / 1000)
+    if (!Number.isFinite(earliestProgramStart)) {
+      earliestProgramStart = isToday
+        ? initialNowSec
+        : new Date(
+          state.tvDate + 'T00:00:00'
+        ).getTime() / 1000
     }
 
-    if (isToday) {
-      minStartSec = Math.min(minStartSec, Math.floor(nowSec / 1800) * 1800)
-      maxEndSec = Math.max(maxEndSec, Math.ceil(nowSec / 1800) * 1800)
+    // Today begins at the current half-hour. Other dates begin at the
+    // first half-hour containing guide data.
+    const timelineStartSec = isToday
+      ? Math.floor(initialNowSec / HALF_HOUR) * HALF_HOUR
+      : Math.floor(earliestProgramStart / HALF_HOUR) * HALF_HOUR
+
+    const minimumTimelineEnd = timelineStartSec + 4 * 3600
+    const timelineEndSec =
+      Math.ceil(
+        Math.max(latestProgramEnd, minimumTimelineEnd) /
+        HALF_HOUR
+      ) * HALF_HOUR
+
+    const timelineWidth =
+      ((timelineEndSec - timelineStartSec) / HALF_HOUR) *
+      HALF_HOUR_PX
+
+    const timeRow = doc.createElement('div')
+    timeRow.className = 'px-guide-time-row'
+    timeRow.style.width =
+      `${CHANNEL_WIDTH + timelineWidth}px`
+
+    const timeCorner = doc.createElement('div')
+    timeCorner.className = 'px-guide-time-corner'
+
+    const timeAxis = doc.createElement('div')
+    timeAxis.className = 'px-guide-time-axis'
+    timeAxis.style.width = `${timelineWidth}px`
+    timeAxis.style.flex = `0 0 ${timelineWidth}px`
+
+    for (
+      let tick = timelineStartSec;
+      tick < timelineEndSec;
+      tick += HALF_HOUR
+    ) {
+      const slot = doc.createElement('div')
+      slot.className = 'px-guide-time-slot'
+      slot.style.flex = `0 0 ${HALF_HOUR_PX}px`
+      slot.textContent = fmtGuideTime(tick)
+      timeAxis.appendChild(slot)
     }
 
-    if (maxEndSec <= minStartSec) maxEndSec = minStartSec + 4 * 3600
-    const timelineWidth = Math.max(240, Math.round(((maxEndSec - minStartSec) / 3600) * HOUR_PX))
+    const topNowLine = doc.createElement('div')
+    topNowLine.className = 'px-guide-time-now'
+    topNowLine.hidden = true
+    timeAxis.appendChild(topNowLine)
 
-    if (channels.length === 0) {
+    timeRow.append(timeCorner, timeAxis)
+    scrollArea.appendChild(timeRow)
+
+    if (!channels.length) {
       const empty = doc.createElement('div')
       empty.className = 'px-guide-loading'
       empty.textContent = 'No channels found for this provider.'
       scrollArea.appendChild(empty)
     }
 
-    for (const ch of channels) {
-      const chKey = guideKeyForChannel(state.tvProvider, ch)
-      const programs = guideData[chKey] || []
+    for (const channel of channels) {
+      const channelKey = guideKeyForChannel(
+        state.tvProvider,
+        channel
+      )
+
+      const programs = [
+        ...(guideData[channelKey] || [])
+      ].sort((a, b) =>
+        guideEpochSeconds(programBeginsAt(a)) -
+        guideEpochSeconds(programBeginsAt(b))
+      )
+
       const row = doc.createElement('div')
       row.className = 'px-guide-ch-row'
+      row.style.width =
+        `${CHANNEL_WIDTH + timelineWidth}px`
 
-      // Channel name (sticky left)
-      const chName = doc.createElement('div')
-      chName.className = 'px-guide-ch-name'
-      const num = ch.channelNumber || ch.index || ''
-      if (ch.thumb) {
-        const img = doc.createElement('img')
-        img.src = liveTVThumbUrl(ch)
-        img.alt = ''
-        img.loading = 'lazy'
-        chName.appendChild(img)
+      const channelName = doc.createElement('div')
+      channelName.className = 'px-guide-ch-name'
+
+      if (channel.thumb) {
+        const image = doc.createElement('img')
+        image.src = liveTVThumbUrl(channel)
+        image.alt = ''
+        image.loading = 'lazy'
+        channelName.appendChild(image)
       }
+
+      const channelParts = channelDisplayParts(channel)
       const nameSpan = doc.createElement('span')
-      nameSpan.textContent = num ? `${num} ${ch.title || ''}` : (ch.title || 'Unknown')
-      chName.appendChild(nameSpan)
-      chName.title = ch.title || ''
-      chName.addEventListener('click', () => void tuneLiveChannel(ch, null))
+      nameSpan.textContent = channelParts.label
+      channelName.appendChild(nameSpan)
+      channelName.title = channelParts.label
+      channelName.addEventListener('click', () => {
+        void tuneLiveChannel(channel, null)
+      })
 
-      // Programs
-      const progArea = doc.createElement('div')
-      progArea.className = 'px-guide-programs'
-      progArea.style.width = `${timelineWidth}px`
-      progArea.style.flex = `0 0 ${timelineWidth}px`
+      const programArea = doc.createElement('div')
+      programArea.className = 'px-guide-programs'
+      programArea.style.width = `${timelineWidth}px`
+      programArea.style.flex = `0 0 ${timelineWidth}px`
 
-      if (programs.length) {
-        let cursorSec = minStartSec
+      let cursorSec = timelineStartSec
+      let visibleProgramCount = 0
 
-        for (const prog of programs) {
-          const startSec = Number(prog.beginsAt || 0)
-          const endSec = Number(prog.endsAt || (startSec + 1800))
+      for (const program of programs) {
+        const originalStartSec =
+          guideEpochSeconds(programBeginsAt(program))
 
-          if (startSec > cursorSec) {
-            const gapPx = Math.max(0, Math.round(((startSec - cursorSec) / 3600) * HOUR_PX))
-            if (gapPx > 0) {
-              const gap = doc.createElement('div')
-              gap.className = 'px-guide-gap'
-              gap.style.width = `${gapPx}px`
-              gap.style.flex = `0 0 ${gapPx}px`
-              progArea.appendChild(gap)
-            }
-          }
+        const originalEndSec =
+          guideEpochSeconds(programEndsAt(program)) ||
+          (originalStartSec + HALF_HOUR)
 
-          const startMs = startSec * 1000
-          const endMs = endSec * 1000
-          const durHours = (endMs - startMs) / 3600000
-          const widthPx = Math.max(60, Math.round(durHours * HOUR_PX))
-
-          const el = doc.createElement('div')
-          el.className = 'px-guide-prog'
-          const isAiring = nowMs >= startMs && nowMs < endMs
-          if (isAiring) el.classList.add('px-airing')
-          el.style.flex = `0 0 ${widthPx}px`
-
-          if (isAiring && endMs > startMs) {
-            const progressPct = Math.max(0, Math.min(100, ((nowMs - startMs) / (endMs - startMs)) * 100))
-
-            const fill = doc.createElement('div')
-            fill.className = 'px-guide-prog-progress'
-            fill.style.width = `${progressPct}%`
-            el.appendChild(fill)
-
-            const bar = doc.createElement('div')
-            bar.className = 'px-guide-prog-progress-bar'
-            bar.style.width = `${progressPct}%`
-            el.appendChild(bar)
-          }
-
-          const tEl = doc.createElement('div')
-          tEl.className = 'px-guide-prog-title'
-
-          const showTitle =
-            prog.grandparentTitle ||
-            prog.parentTitle ||
-            prog.originalTitle ||
-            prog.title ||
-            '(No Title)'
-
-          tEl.textContent = showTitle
-
-          const tmEl = doc.createElement('div')
-          tmEl.className = 'px-guide-prog-time'
-          tmEl.textContent = startSec ? `${fmtGuideTime(startSec)} – ${fmtGuideTime(endSec)}` : ''
-
-          el.append(tEl, tmEl)
-
-          const episodeTitle =
-            prog.title && prog.title !== showTitle
-              ? prog.title
-              : ''
-
-          el.title = [showTitle, episodeTitle, prog.summary]
-            .filter(Boolean)
-            .join('\n')
-          el.addEventListener('click', () => void tuneLiveChannel(ch, prog))
-          progArea.appendChild(el)
-
-          cursorSec = Math.max(cursorSec, endSec)
+        if (
+          originalEndSec <= timelineStartSec ||
+          originalStartSec >= timelineEndSec
+        ) {
+          continue
         }
 
-        if (cursorSec < maxEndSec) {
-          const tailGapPx = Math.max(0, Math.round(((maxEndSec - cursorSec) / 3600) * HOUR_PX))
-          if (tailGapPx > 0) {
+        const visibleStartSec = Math.max(
+          originalStartSec,
+          timelineStartSec
+        )
+
+        const visibleEndSec = Math.min(
+          originalEndSec,
+          timelineEndSec
+        )
+
+        if (visibleStartSec > cursorSec) {
+          const gapWidth =
+            ((visibleStartSec - cursorSec) / 3600) *
+            HOUR_PX
+
+          if (gapWidth > 0) {
             const gap = doc.createElement('div')
             gap.className = 'px-guide-gap'
-            gap.style.width = `${tailGapPx}px`
-            gap.style.flex = `0 0 ${tailGapPx}px`
-            progArea.appendChild(gap)
+            gap.style.flex = `0 0 ${gapWidth}px`
+            programArea.appendChild(gap)
           }
         }
-      } else {
-        const empty = doc.createElement('div')
-        empty.className = 'px-guide-prog'
-        empty.style.flex = `0 0 ${timelineWidth}px`
-        const emT = doc.createElement('div')
-        emT.className = 'px-guide-prog-title'
-        emT.style.color = '#666'
-        emT.textContent = 'No guide data'
-        empty.appendChild(emT)
-        progArea.appendChild(empty)
+
+        const width =
+          ((visibleEndSec - visibleStartSec) / 3600) *
+          HOUR_PX
+
+        if (width <= 0) continue
+
+        const programElement = doc.createElement('div')
+        programElement.className = 'px-guide-prog'
+        programElement.dataset.startSec =
+          String(originalStartSec)
+        programElement.dataset.endSec =
+          String(originalEndSec)
+        programElement.dataset.visibleStartSec =
+          String(visibleStartSec)
+        programElement.dataset.visibleEndSec =
+          String(visibleEndSec)
+        programElement.style.flex = `0 0 ${width}px`
+        programElement.setAttribute('role', 'button')
+        programElement.tabIndex = 0
+
+        const showTitle =
+          program.grandparentTitle ||
+          program.parentTitle ||
+          program.originalTitle ||
+          program.title ||
+          '(No Title)'
+
+        const titleElement = doc.createElement('div')
+        titleElement.className = 'px-guide-prog-title'
+        titleElement.textContent = showTitle
+
+        const timeElement = doc.createElement('div')
+        timeElement.className = 'px-guide-prog-time'
+        timeElement.textContent =
+          `${fmtGuideTime(originalStartSec)} – ` +
+          `${fmtGuideTime(originalEndSec)}`
+
+        programElement.append(
+          titleElement,
+          timeElement
+        )
+
+        const episodeTitle =
+          program.title &&
+          program.title !== showTitle
+            ? program.title
+            : ''
+
+        programElement.title = [
+          showTitle,
+          episodeTitle,
+          program.summary
+        ].filter(Boolean).join('\n')
+
+        const activate = () => {
+          void tuneLiveChannel(channel, program)
+        }
+
+        programElement.addEventListener(
+          'click',
+          activate
+        )
+
+        programElement.addEventListener(
+          'keydown',
+          (event) => {
+            if (
+              event.key !== 'Enter' &&
+              event.key !== ' '
+            ) {
+              return
+            }
+
+            event.preventDefault()
+            activate()
+          }
+        )
+
+        programArea.appendChild(programElement)
+        cursorSec = visibleEndSec
+        visibleProgramCount++
       }
 
-      row.append(chName, progArea)
+      if (cursorSec < timelineEndSec) {
+        const tailWidth =
+          ((timelineEndSec - cursorSec) / 3600) *
+          HOUR_PX
+
+        const gap = doc.createElement('div')
+        gap.className = 'px-guide-gap'
+        gap.style.flex = `0 0 ${tailWidth}px`
+
+        if (!visibleProgramCount) {
+          const emptyTitle = doc.createElement('div')
+          emptyTitle.className = 'px-guide-prog-title'
+          emptyTitle.style.color = '#666'
+          emptyTitle.style.padding = '17px 8px'
+          emptyTitle.textContent = 'No guide data'
+          gap.appendChild(emptyTitle)
+        }
+
+        programArea.appendChild(gap)
+      }
+
+      row.append(channelName, programArea)
       scrollArea.appendChild(row)
     }
 
-    if (isToday && nowSec >= minStartSec && nowSec <= maxEndSec) {
-      const nowLine = doc.createElement('div')
-      nowLine.className = 'px-guide-now-line'
-      scrollArea.appendChild(nowLine)
+    let lastCurrentSignature = ''
 
-      const nowOffsetPx = ((nowSec - minStartSec) / 3600) * HOUR_PX
+    const updateNow = () => {
+      if (!scrollArea.isConnected) return ''
 
-      const updateNowLine = () => {
-        const leftPx = CHANNEL_COL_PX + nowOffsetPx - scrollArea.scrollLeft
-        const visibleMin = CHANNEL_COL_PX
-        const visibleMax = scrollArea.clientWidth
+      const nowSec = Date.now() / 1000
+      const currentPrograms = []
 
-        if (leftPx < visibleMin - 2 || leftPx > visibleMax + 2) {
-          nowLine.style.display = 'none'
-          return
-        }
+      const topLeft =
+        ((nowSec - timelineStartSec) / 3600) *
+        HOUR_PX
 
-        nowLine.style.display = ''
-        nowLine.style.left = `${leftPx}px`
+      const showTopLine =
+        isToday &&
+        nowSec >= timelineStartSec &&
+        nowSec <= timelineEndSec
+
+      topNowLine.hidden = !showTopLine
+
+      if (showTopLine) {
+        topNowLine.style.left = `${topLeft}px`
       }
 
-      scrollArea.addEventListener('scroll', updateNowLine, { passive: true })
+      for (const programElement of scrollArea.querySelectorAll(
+        '.px-guide-prog[data-start-sec]'
+      )) {
+        const startSec = guideEpochSeconds(
+          programElement.dataset.startSec
+        )
 
-      const desiredScroll = Math.max(0, nowOffsetPx - 140)
-      scrollArea.scrollLeft = desiredScroll
-      updateNowLine()
+        const endSec = guideEpochSeconds(
+          programElement.dataset.endSec
+        )
+
+        const visibleStartSec = guideEpochSeconds(
+          programElement.dataset.visibleStartSec
+        )
+
+        const visibleEndSec = guideEpochSeconds(
+          programElement.dataset.visibleEndSec
+        )
+
+        const airing =
+          isToday &&
+          nowSec >= startSec &&
+          nowSec < endSec
+
+        programElement.classList.toggle(
+          'px-airing',
+          airing
+        )
+
+        if (airing) {
+          currentPrograms.push(
+            `${startSec}:${endSec}`
+          )
+
+          const visibleProgress = Math.max(
+            0,
+            Math.min(
+              100,
+              ((nowSec - visibleStartSec) /
+                (visibleEndSec - visibleStartSec)) *
+                100
+            )
+          )
+
+          const lineStart = Math.max(
+            0,
+            visibleProgress - 0.8
+          )
+
+          const lineEnd = Math.min(
+            100,
+            visibleProgress + 0.8
+          )
+
+          programElement.style.backgroundImage =
+            `linear-gradient(to right, ` +
+            `rgba(229,160,13,.24) 0%, ` +
+            `rgba(229,160,13,.24) ${lineStart}%, ` +
+            `#ffffff ${lineStart}%, ` +
+            `#ffffff ${lineEnd}%, ` +
+            `transparent ${lineEnd}%, ` +
+            `transparent 100%)`
+
+          programElement.style.boxShadow =
+            'inset 0 -3px 0 #e5a00d'
+        } else {
+          programElement.style.backgroundImage = ''
+          programElement.style.boxShadow = ''
+        }
+      }
+
+      return currentPrograms.sort().join('|')
     }
 
     container.appendChild(scrollArea)
     setMain(container)
+
+    lastCurrentSignature = updateNow()
+
+    // Today's ruler begins at the current half-hour, so no horizontal
+    // offset is needed to find the current program.
+    if (isToday) {
+      scrollArea.scrollLeft = 0
+
+      state.tvNowTimer = setInterval(() => {
+        if (!scrollArea.isConnected) {
+          clearGuideNowTimer()
+          return
+        }
+
+        const currentSignature = updateNow()
+
+        if (
+          lastCurrentSignature &&
+          currentSignature !== lastCurrentSignature
+        ) {
+          clearGuideNowTimer()
+          void navigate(
+            { type: 'livetv', title: 'Live TV' },
+            false
+          )
+          return
+        }
+
+        lastCurrentSignature = currentSignature
+      }, 15_000)
+    }
+  }
+
+  function addAndPlayLiveResult(result) {
+    const track = ampwin.links.addSearchResult(result, false)
+
+    // Match the playback path already used by normal Plexify video items.
+    const tracks = ampwin.playlist?.getTracks?.() || []
+    const index = tracks.findIndex((candidate) => candidate.id === track?.id)
+
+    if (index >= 0 && ampwin.playlist?.playIndex) {
+      ampwin.playlist.playIndex(index)
+    } else if (ampwin.links?.play) {
+      // Compatibility fallback for older Ampwin builds.
+      ampwin.links.play(track)
+    }
+
+    return track
+  }
+
+  function asArray(value) {
+    if (value === undefined || value === null) return []
+    return Array.isArray(value) ? value : [value]
+  }
+
+  function normalizeTuneIdentifier(value) {
+    if (value === undefined || value === null) return []
+    const raw = String(value).trim()
+    if (!raw) return []
+
+    const values = []
+
+    const add = (candidate) => {
+      if (candidate === undefined || candidate === null) return
+      let normalized = String(candidate).trim()
+      if (!normalized) return
+      try { normalized = decodeURIComponent(normalized) } catch {}
+      normalized = normalized.replace(/^channel:\/\//i, '')
+      normalized = normalized.replace(/^\/+|\/+$/g, '')
+      if (normalized && !values.includes(normalized)) values.push(normalized)
+    }
+
+    // A Plex key can be a full provider path. The tune endpoint needs only
+    // the channel identifier portion.
+    const channelMatch = raw.match(/\/channels\/([^/?#]+)/i)
+    if (channelMatch) add(channelMatch[1])
+
+    add(raw)
+
+    if (raw.includes('/')) {
+      const parts = raw.split('/').filter(Boolean)
+      add(parts[parts.length - 1])
+    }
+
+    return values
+  }
+
+  function collectLiveTVTuneIdentifiers(channel, program) {
+    const candidates = []
+    const add = (value) => {
+      for (const id of normalizeTuneIdentifier(value)) {
+        if (!candidates.includes(id)) candidates.push(id)
+      }
+    }
+
+    // Program metadata is first because Plex's grid response can expose the
+    // exact composite identifier used by /channels/<id>/tune.
+    for (const value of [
+      program?.channelIdentifier,
+      program?.channelId,
+      program?.channelID,
+      program?.channelKey,
+      program?.channelGuid,
+      program?.gridKey,
+      channel?.tuneIdentifier,
+      channel?.channelIdentifier,
+      channel?.identifier,
+      channel?.id,
+      channel?.guid,
+      channel?.key,
+      channel?.gridKey,
+      channel?.channelNumber,
+      channel?.guideNumber,
+      channel?.vcn,
+      channel?.number,
+      channel?.index
+    ]) {
+      add(value)
+    }
+
+    // Composite Plex/XMLTV identifiers are usually safer than display-only
+    // channel numbers, so try them first while retaining numeric fallbacks.
+    return candidates.sort((a, b) => {
+      const aComposite = /[A-Za-z.:_-]/.test(a) ? 1 : 0
+      const bComposite = /[A-Za-z.:_-]/.test(b) ? 1 : 0
+      return bComposite - aComposite
+    })
+  }
+
+  function collectLiveTVSessionPaths(value) {
+    const paths = []
+    const seen = new Set()
+
+    const addPath = (candidate) => {
+      if (candidate === undefined || candidate === null) return
+      const raw = String(candidate).trim()
+      if (!raw) return
+
+      const direct = raw.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
+      if (direct) {
+        const path = `/livetv/sessions/${direct[1]}`
+        if (!paths.includes(path)) paths.push(path)
+        return
+      }
+
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+        const path = `/livetv/sessions/${raw}`
+        if (!paths.includes(path)) paths.push(path)
+      }
+    }
+
+    const walk = (node, parentKey = '') => {
+      if (node === undefined || node === null) return
+
+      if (typeof node === 'string' || typeof node === 'number') {
+        if (
+          /^(key|ratingKey|session|sessionKey|uuid)$/i.test(parentKey) ||
+          String(node).includes('/livetv/sessions/')
+        ) {
+          addPath(node)
+        }
+        return
+      }
+
+      if (typeof node !== 'object' || seen.has(node)) return
+      seen.add(node)
+
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, parentKey)
+        return
+      }
+
+      for (const [key, child] of Object.entries(node)) {
+        walk(child, key)
+      }
+    }
+
+    walk(value)
+    return paths
+  }
+
+  function firstObject(value) {
+    if (!value) return null
+    if (Array.isArray(value)) {
+      return value.find((item) => item && typeof item === 'object') || null
+    }
+    return typeof value === 'object' ? value : null
+  }
+
+  function extractLocalDvrTuneMetadata(tuneBody) {
+    const container = tuneBody?.MediaContainer || tuneBody || {}
+    const subscription = firstObject(container.MediaSubscription)
+    const operation = firstObject(subscription?.MediaGrabOperation)
+
+    const nestedMetadata = firstObject(operation?.Metadata)
+    if (nestedMetadata) return nestedMetadata
+
+    return firstObject(container.Metadata)
+  }
+
+  function extractLiveTVSessionPathFromText(rawBody) {
+    if (!rawBody) return ''
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const metadata = extractLocalDvrTuneMetadata(parsed)
+      const metadataKey = String(metadata?.key || '')
+      if (metadataKey.includes('/livetv/sessions/')) return metadataKey
+
+      const jsonPath = collectLiveTVSessionPaths(parsed)[0]
+      if (jsonPath) return jsonPath
+    } catch {}
+
+    // Prefer a Metadata key over any unrelated UUID elsewhere in the response.
+    const metadataKey =
+      rawBody.match(/<Metadata\b[^>]*\bkey=["']([^"']*\/livetv\/sessions\/[^"']+)["']/i) ||
+      rawBody.match(/["']key["']\s*:\s*["']([^"']*\/livetv\/sessions\/[^"']+)["']/i)
+
+    if (metadataKey?.[1]) return metadataKey[1]
+
+    const direct = rawBody.match(/\/livetv\/sessions\/([^"'&<>\s]+)/i)
+    if (direct) return `/livetv/sessions/${direct[1]}`
+
+    return ''
+  }
+
+  function extractLocalDvrRatingKey(rawBody) {
+    if (!rawBody) return ''
+
+    try {
+      const parsed = JSON.parse(rawBody)
+      const metadata = extractLocalDvrTuneMetadata(parsed)
+      return String(metadata?.ratingKey || metadata?.key || '')
+    } catch {}
+
+    const match =
+      rawBody.match(/<Metadata\b[^>]*\bratingKey=["']([^"']+)["']/i) ||
+      rawBody.match(/["']ratingKey["']\s*:\s*["']?([^"',}\s]+)["']?/i)
+
+    return match?.[1] || ''
   }
 
   async function currentLiveTVSessionPaths() {
@@ -1872,7 +2413,7 @@
     live.keepaliveTimer = setInterval(() => {
       if (state.tvLiveSession !== live) return
       void sendLiveTVTimeline(live, 'playing')
-    }, 30_000)
+    }, 15_000)
   }
 
   function encodePlexQuery(params) {
@@ -2031,14 +2572,17 @@
       return
     }
 
-    const displayTitle =
+    const currentProgramTitle =
       program?.grandparentTitle ||
       program?.parentTitle ||
       program?.title ||
       channel.title ||
       tuneIds[0]
 
-    toast(`Tuning to ${displayTitle}…`)
+    const channelParts = channelDisplayParts(channel)
+    const playlistTitle = channelParts.label
+
+    toast(`Tuning to ${currentProgramTitle}…`)
 
     try {
       const sessionsBefore = new Set(await currentLiveTVSessionPaths())
@@ -2112,7 +2656,7 @@
 
       const result = {
         url: livePlayback.url,
-        title: `📺 ${displayTitle}`,
+        title: playlistTitle,
         durationSec: 0,
         uploader: state.server.name || 'Live TV',
         thumbnail: liveTVThumbUrl(channel)
@@ -2128,7 +2672,7 @@
         sessionIdentifier: livePlayback.sessionIdentifier,
         transcodeSessionId: livePlayback.transcodeSessionId
       })
-      toast(`Starting: ${displayTitle}`)
+      toast(`Starting: ${channelParts.label}`)
     } catch (error) {
       console.error('[Plexify] DVR tune failed:', error)
       toast(`Failed to tune: ${error?.message || error}`)
@@ -2400,6 +2944,7 @@
   }
 
   window.addEventListener('unload', () => {
+    clearGuideNowTimer()
     if (state.watchdog) clearInterval(state.watchdog)
     stopLiveTVKeepalive(true)
     try { state.playerErrorUnsub?.() } catch {}
